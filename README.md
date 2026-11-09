@@ -1,8 +1,16 @@
 # Zillions
 
 A colony-survival strategy game in the spirit of *They Are Billions*, written in
-C++20 on a small custom engine. This first milestone is the engine core and the
-procedural map generator.
+C++20 on a small custom engine.
+
+You build and fortify a colony on a procedurally generated map, gather wood,
+stone and ore to grow it, and hold out against ever-larger zombie hordes that
+pour in from the map edges. The terrain is the defence: cliffs, rivers and
+mountains funnel the horde through ramps, fords and passes, and the game is
+about choosing which chokepoints to hold. See [the design notes](docs/design.md).
+
+So far only the engine and the map generator exist; the colony, the economy and
+the horde are still to build.
 
 ![A generated map](docs/screenshots/map-seed-7.jpg)
 
