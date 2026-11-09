@@ -140,7 +140,7 @@ bool same_map(const TileMap& a, const TileMap& b) {
 TEST(mapgen_is_deterministic_across_thread_counts) {
     MapGenParams params;
     params.seed = 1234;
-    params.size = 128;
+    params.size = 256;
     JobSystem one(1), four(4);
     const TileMap a = generate_map(params, one);
     const TileMap b = generate_map(params, four);
@@ -158,7 +158,7 @@ void check_map_invariants(const TileMap& map, const MapGenParams& params) {
     // The colony site is open, level ground with room to build.
     CHECK(map.walkable(map.start.x, map.start.y));
     CHECK(map.buildable(map.start.x, map.start.y));
-    CHECK(s.buildable_near_start >= 300);
+    CHECK(s.buildable_near_start >= 300 * map.resolution * map.resolution);
 
     // The horde must be able to reach the colony, and the colony most of the map.
     CHECK(s.reachable_border_tiles > 0);
@@ -181,7 +181,7 @@ void check_map_invariants(const TileMap& map, const MapGenParams& params) {
             const Terrain t = map.terrain[i];
             const u8 f = map.flags[i];
             const f32 dx = static_cast<f32>(x - map.start.x), dy = static_cast<f32>(y - map.start.y);
-            const f32 d = std::sqrt(dx * dx + dy * dy);
+            const f32 d = std::sqrt(dx * dx + dy * dy) / static_cast<f32>(map.resolution);  // world units
             if (map.resource[i] == Resource::Stone && d <= 36.0f) stone_near = true;
             if (t == Terrain::Forest && d <= 40.0f) forest_near = true;
 
@@ -237,10 +237,14 @@ TEST(mapgen_invariants_hold_for_many_seeds) {
     for (u64 seed = 1; seed <= 24; ++seed) {
         MapGenParams params;
         params.seed = seed * 7919;
-        params.size = seed % 3 == 0 ? 128 : (seed % 3 == 1 ? 192 : 256);
+        // The same spread of world sizes (128 to 256 units), on coarse and fine grids.
+        params.resolution = seed % 2 == 0 ? 1 : 2;
+        params.size = (seed % 3 == 0 ? 128 : (seed % 3 == 1 ? 192 : 256)) * params.resolution;
         const int before = g_failures;
         check_map_invariants(generate_map(params, jobs), params);
-        if (g_failures != before) std::printf("    (seed %llu, size %d)\n", static_cast<unsigned long long>(params.seed), params.size);
+        if (g_failures != before) {
+            std::printf("    (seed %llu, size %d, resolution %d)\n", static_cast<unsigned long long>(params.seed), params.size, params.resolution);
+        }
     }
 }
 
@@ -249,6 +253,7 @@ TEST(mapgen_handles_extreme_parameters) {
     MapGenParams dry;
     dry.seed = 5;
     dry.size = 96;
+    dry.resolution = 1;
     dry.water = 0.0f;
     dry.rivers = 0.0f;
     dry.forest = 0.0f;
@@ -260,6 +265,7 @@ TEST(mapgen_handles_extreme_parameters) {
     MapGenParams flat;
     flat.seed = 9;
     flat.size = 128;
+    flat.resolution = 1;
     flat.uplands = 0.0f;
     const TileMap plain = generate_map(flat, jobs);
     CHECK(plain.stats.cliff_edges == 0 && plain.stats.ramps == 0);
@@ -268,6 +274,7 @@ TEST(mapgen_handles_extreme_parameters) {
     MapGenParams harsh;
     harsh.seed = 6;
     harsh.size = 160;
+    harsh.resolution = 1;
     harsh.water = 0.30f;
     harsh.mountains = 0.30f;
     harsh.forest = 0.6f;
@@ -276,6 +283,39 @@ TEST(mapgen_handles_extreme_parameters) {
     CHECK(rugged.walkable(rugged.start.x, rugged.start.y));
     CHECK(rugged.stats.reachable_border_tiles > 0);
     CHECK(rugged.stats.buildable_near_start >= 300);
+}
+
+// Resolution divides the same world into a finer grid: the geography must stay
+// put while every feature gains tiles.
+TEST(mapgen_resolution_keeps_the_geography) {
+    JobSystem jobs;
+    MapGenParams coarse, fine;
+    coarse.seed = fine.seed = 4242;
+    coarse.resolution = 1;
+    coarse.size = 192;
+    fine.resolution = 4;
+    fine.size = 768;
+    const TileMap a = generate_map(coarse, jobs), b = generate_map(fine, jobs);
+    check_map_invariants(b, fine);
+
+    // Lakes and mountains come straight from the shared elevation field, so
+    // nearly every coarse tile agrees with the fine tile at its centre.
+    int compared = 0, agree = 0;
+    for (i32 y = 0; y < a.height; ++y) {
+        for (i32 x = 0; x < a.width; ++x) {
+            const Terrain ta = a.terrain[static_cast<size_t>(a.index(x, y))];
+            const Terrain tb = b.terrain[static_cast<size_t>(b.index(x * 4 + 2, y * 4 + 2))];
+            const auto broad = [](Terrain t) { return t == Terrain::Mountain ? 2 : (t == Terrain::Water ? 1 : 0); };
+            ++compared;
+            agree += broad(ta) == broad(tb);
+        }
+    }
+    CHECK(agree >= compared * 0.93);
+
+    // Sixteen times the tiles, so about sixteen times the room.
+    const f64 ratio = static_cast<f64>(b.stats.walkable_tiles) / a.stats.walkable_tiles;
+    CHECK(ratio > 13.0 && ratio < 19.0);
+    CHECK(b.stats.buildable_near_start > 10 * a.stats.buildable_near_start);
 }
 
 }  // namespace

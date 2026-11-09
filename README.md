@@ -40,7 +40,7 @@ which need no windowing system or GPU.
 ## Running
 
 ```
-zillions [--seed N] [--size N] [--width W --height H] [--no-vsync]
+zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no-vsync]
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
          [--overlay height|pass] [--grid] [--bench]
 ```
@@ -101,6 +101,33 @@ simulation can run in tests, tools and (later) a server.
 
 ## Map generation
 
+### Size and resolution
+
+A map is `size` × `size` tiles, and `resolution` is how many tiles span one
+world unit. Every feature the generator makes (lakes, ranges, river widths,
+beaches, ramps, the start area) is sized in world units, so the two settings
+do different things:
+
+- **`--size`** with the same resolution gives a bigger world: more lakes, more
+  ranges, more ground to cover.
+- **`--resolution`** with the size scaled to match gives the same world on a
+  finer grid: every pass, ford and plateau is more tiles across, so more
+  buildings and units fit in the same place.
+
+The default is 512 × 512 tiles at 2 tiles per world unit. The same seed at
+`--size 256 --resolution 1` or `--size 1024 --resolution 4` is the same
+geography at half or twice the detail. Resolution must be 1, 2 or 4.
+
+Noise is evaluated once per world unit and interpolated up to the tile grid,
+and the relief texture is laid out in world units too, so a finer grid costs
+far less than its tile count suggests.
+
+A 1024 × 1024 map at the default resolution, four times the area of the default:
+
+![A 1024x1024 map](docs/screenshots/map-1024.jpg)
+
+### Steps
+
 `generate_map()` takes a seed and a few coverage parameters and runs these steps:
 
 1. **Noise fields** (parallel): domain-warped fBm for rolling land and lake
@@ -123,8 +150,8 @@ simulation can run in tests, tools and (later) a server.
 8. **Fords**: shallow crossings on narrow river reaches.
 9. **Ore**: stone, iron and gold where mountains meet open ground, richer ores
    further out; stone and iron are guaranteed near the start.
-10. **Ramps**: slopes three tiles wide cut into straight stretches of cliff,
-    spaced well apart.
+10. **Ramps**: slopes three world units wide cut into straight stretches of
+    cliff, spaced well apart.
 11. **Connectivity**: any sizeable region the colony cannot reach is joined by
     the cheapest cut (a ford, a pass, a gap in the trees or a ramp).
 12. **Derived data**: walkable/buildable flags, water depth, statistics.

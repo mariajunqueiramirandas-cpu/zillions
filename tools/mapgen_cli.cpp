@@ -1,5 +1,5 @@
 // Headless map generator.
-//   zl_mapgen [--seed N] [--size N] [--out preview.png] [--scale N] [--bench]
+//   zl_mapgen [--seed N] [--size N] [--resolution N] [--out preview.png] [--scale N] [--bench]
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,7 +16,8 @@ namespace {
 void print_stats(const TileMap& map) {
     const MapStats& s = map.stats;
     const f64 total = static_cast<f64>(map.tile_count());
-    std::printf("seed %llu, %dx%d, generated in %.2f ms\n", static_cast<unsigned long long>(map.seed), map.width, map.height, s.gen_ms);
+    std::printf("seed %llu, %dx%d tiles at %d per world unit, generated in %.2f ms\n", static_cast<unsigned long long>(map.seed), map.width,
+                map.height, map.resolution, s.gen_ms);
     for (int t = 0; t < kTerrainCount; ++t) {
         std::printf("  %-9s %6d  %5.1f%%\n", terrain_name(static_cast<Terrain>(t)), s.terrain_tiles[t], 100.0 * s.terrain_tiles[t] / total);
     }
@@ -40,19 +41,21 @@ int main(int argc, char** argv) {
         const auto value = [&]() -> const char* { return i + 1 < argc ? argv[++i] : "0"; };
         if (!std::strcmp(argv[i], "--seed")) params.seed = std::strtoull(value(), nullptr, 10);
         else if (!std::strcmp(argv[i], "--size")) params.size = std::atoi(value());
+        else if (!std::strcmp(argv[i], "--resolution")) params.resolution = std::atoi(value());
         else if (!std::strcmp(argv[i], "--out")) out = value();
         else if (!std::strcmp(argv[i], "--scale")) scale = std::atoi(value());
         else if (!std::strcmp(argv[i], "--bench")) bench = true;
         else {
-            std::fprintf(stderr, "usage: zl_mapgen [--seed N] [--size N] [--out preview.png] [--scale N] [--bench]\n");
+            std::fprintf(stderr, "usage: zl_mapgen [--seed N] [--size N] [--resolution 1|2|4] [--out preview.png] [--scale N] [--bench]\n");
             return 2;
         }
     }
 
     JobSystem jobs;
     if (bench) {
-        std::printf("map generation, %d threads (best of 5)\n", jobs.thread_count());
-        for (const i32 size : {128, 256, 512, 1024}) {
+        std::printf("map generation at %d tiles per world unit, %d threads (best of 5)\n", params.resolution, jobs.thread_count());
+        for (const i32 size : {256, 512, 1024, 2048}) {
+            if (size < 64 * params.resolution) continue;
             f64 best = 1.0e9;
             MapGenParams p = params;
             p.size = size;

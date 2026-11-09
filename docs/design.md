@@ -19,6 +19,9 @@ the colony.
   C++ engine built for throughput.
 - **Maps:** generated from a seed, with the colony starting at the centre on
   open, level ground with stone and iron in reach.
+- **Grid:** terrain is sized in world units and the tile grid is finer than
+  that: 2 tiles per unit by default, adjustable to 1 or 4. A fine grid is what
+  lets a chokepoint hold a crowd and a small area hold many buildings.
 - **Height:** open land sits on three levels. Cliffs block movement; ramps are
   the only way between levels and can never be built on, so the routes stay
   open for both sides.
@@ -41,6 +44,6 @@ the colony.
 - How a breach spreads through the colony.
 - What high ground gives a defender: range, vision, damage.
 - How many ramps a map should have. The generator currently places roughly
-  55 to 65 on a 256×256 map, which is a guess until there is a horde to test
+  40 to 50 on the default 512×512 map, which is a guess until there is a horde to test
   it against.
 - Win condition: survive a fixed number of days, or something else.

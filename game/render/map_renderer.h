@@ -53,14 +53,14 @@ private:
 
     TerrainArt art_;
     Shader terrain_;
-    i32 u_world_ = -1, u_map_size_ = -1, u_time_ = -1, u_grid_ = -1, u_overlay_ = -1, u_pixel_ = -1, u_height_range_ = -1;
-    f32 height_range_ = 1.0f;
+    i32 u_world_ = -1, u_map_size_ = -1, u_time_ = -1, u_grid_ = -1, u_overlay_ = -1, u_pixel_ = -1, u_height_range_ = -1, u_unit_ = -1;
+    f32 height_range_ = 1.0f, tiles_per_unit_ = 1.0f;
     u32 vao_ = 0;
 
     Texture ground_;    // terrain texture array
     Texture sprites_;   // sprite atlas
     Texture tiles_;     // per-tile ids, point sampled
-    Texture relief_;    // surface normal, height and cavity at kReliefScale texels per tile
+    Texture relief_;    // surface normal, height and cavity at kReliefTexelsPerUnit texels per world unit
     Texture surface_;   // mountain altitude, cliff faces and height level, same resolution
     Texture depth_;     // per-tile water depth and moisture, filtered
 

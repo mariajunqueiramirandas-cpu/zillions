@@ -10,7 +10,12 @@ class JobSystem;
 
 struct MapGenParams {
     u64 seed = 1;
-    i32 size = 256;         // maps are square, size x size tiles
+    i32 size = 512;         // maps are square, size x size tiles
+    // Tiles per world unit: 1, 2 or 4. Lakes, ranges, rivers and every other
+    // feature are sized in world units, so raising the resolution keeps the
+    // geography and divides it into a finer grid: more tiles across every
+    // pass, shore and plateau, and room for more units in the same place.
+    i32 resolution = 2;
     f32 water = 0.11f;      // fraction of the map covered by lakes
     f32 mountains = 0.13f;  // fraction of the map covered by mountains
     f32 forest = 0.27f;     // fraction of open land covered by trees

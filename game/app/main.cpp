@@ -39,7 +39,8 @@ void usage() {
     std::puts(
         "usage: zillions [options]\n"
         "  --seed N             map seed (default 1)\n"
-        "  --size N             map size in tiles (default 256)\n"
+        "  --size N             map size in tiles (default 512)\n"
+        "  --resolution N       tiles per world unit: 1, 2 or 4 (default 2)\n"
         "  --width W --height H window or screenshot size in pixels\n"
         "  --no-vsync           uncap the frame rate\n"
         "  --screenshot FILE    render one frame to a PNG and exit\n"
@@ -60,6 +61,7 @@ bool parse(int argc, char** argv, Options& o) {
         const auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : "0"; };
         if (is("--seed")) o.map.seed = std::strtoull(next(), nullptr, 10);
         else if (is("--size")) o.map.size = std::atoi(next());
+        else if (is("--resolution")) o.map.resolution = std::atoi(next());
         else if (is("--width")) o.width = std::atoi(next());
         else if (is("--height")) o.height = std::atoi(next());
         else if (is("--no-vsync")) o.vsync = false;
@@ -87,7 +89,12 @@ bool parse(int argc, char** argv, Options& o) {
             return false;
         }
     }
-    return o.map.size >= 64 && o.map.size <= 4096 && o.width > 0 && o.height > 0;
+    const i32 res = o.map.resolution;
+    if ((res != 1 && res != 2 && res != 4) || o.map.size < 64 * res || o.map.size > 4096 || o.width <= 0 || o.height <= 0) {
+        usage();
+        return false;
+    }
+    return true;
 }
 
 f32 fit_zoom(const TileMap& map, Vec2 viewport) {

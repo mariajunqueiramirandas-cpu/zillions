@@ -20,10 +20,10 @@ constexpr i32 kDx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
 constexpr i32 kDy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
 constexpr f32 kDiag = 1.41421356f;
 
-// Height, in tiles, that one unit of map elevation rises within a level: a
+// Height, in world units, that one unit of map elevation rises within a level: a
 // faint roll that keeps flat ground from looking dead.
 constexpr f32 kPlainHeight = 6.0f;
-// Height of one level above the next, in tiles.
+// Height of one level above the next, in world units.
 constexpr f32 kLevelHeight = 1.6f;
 // Half-width of a cliff face, as a fraction of the blend between two levels.
 constexpr f32 kCliffWidth = 0.20f;
@@ -62,7 +62,7 @@ struct Grid {
 // `rock` marks mountain texels; on return `rise` holds height above the foot.
 void erode_mountains(const Grid& g, const std::vector<u8>& rock, u32 seed, JobSystem& jobs, std::vector<f32>& rise) {
     const size_t n = static_cast<size_t>(g.w) * static_cast<size_t>(g.h);
-    const f32 texel = 1.0f / static_cast<f32>(kReliefScale);  // tiles per texel
+    const f32 texel = 1.0f / static_cast<f32>(kReliefTexelsPerUnit);  // world units per texel
 
     // Distance to the foot of the range, in texels: the first drainage surface
     // is a dome, so the first main divide follows the middle of each massif.
@@ -266,7 +266,10 @@ void box_blur(const Grid& g, const std::vector<f32>& src, std::vector<f32>& dst,
 
 Relief build_relief(const TileMap& map, JobSystem& jobs) {
     const i32 w = map.width, h = map.height;
-    const Grid g{w * kReliefScale, h * kReliefScale};
+    // Texels per tile. The relief is laid out in world units, so a finer tile
+    // grid over the same geography does not need a larger relief.
+    const i32 scale = std::max(1, kReliefTexelsPerUnit / map.resolution);
+    const Grid g{w * scale, h * scale};
     const size_t n = static_cast<size_t>(g.w) * static_cast<size_t>(g.h);
     const size_t tiles = static_cast<size_t>(w) * static_cast<size_t>(h);
     const auto tile_at = [&](i32 x, i32 y) { return static_cast<size_t>(clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)); };
@@ -309,15 +312,15 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
     std::vector<u8> rock(n);
     jobs.parallel_for(g.h, 16, [&](i32 y0, i32 y1) {
         for (i32 y = y0; y < y1; ++y) {
-            const f32 ty = (static_cast<f32>(y) + 0.5f) / kReliefScale - 0.5f;  // in tiles, relative to tile centres
+            const f32 ty = (static_cast<f32>(y) + 0.5f) / static_cast<f32>(scale) - 0.5f;  // in tiles, relative to tile centres
             const i32 iy = static_cast<i32>(std::floor(ty));
             const f32 fy = ty - static_cast<f32>(iy);
             for (i32 x = 0; x < g.w; ++x) {
-                const f32 tx = (static_cast<f32>(x) + 0.5f) / kReliefScale - 0.5f;
+                const f32 tx = (static_cast<f32>(x) + 0.5f) / static_cast<f32>(scale) - 0.5f;
                 const i32 ix = static_cast<i32>(std::floor(tx));
                 const f32 fx = tx - static_cast<f32>(ix);
                 const size_t i = g.at(x, y);
-                rock[i] = map.terrain[tile_at(x / kReliefScale, y / kReliefScale)] == Terrain::Mountain;
+                rock[i] = map.terrain[tile_at(x / scale, y / scale)] == Terrain::Mountain;
 
                 // Undulation: spline upsampling keeps slopes continuous across tile borders.
                 f32 rows[4];
@@ -343,16 +346,16 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
         std::vector<f32> tmp(n);
         // Two wide passes approximate a Gaussian about a tile across, enough
         // to iron out the one-tile ripple of a diagonal staircase.
-        box_blur(g, terrace, tmp, kReliefScale, jobs);
-        box_blur(g, tmp, terrace, kReliefScale, jobs);
-        box_blur(g, gentle, tmp, kReliefScale / 2, jobs);
+        box_blur(g, terrace, tmp, kReliefTexelsPerUnit, jobs);
+        box_blur(g, tmp, terrace, kReliefTexelsPerUnit, jobs);
+        box_blur(g, gentle, tmp, kReliefTexelsPerUnit / 2, jobs);
         gentle.swap(tmp);
     }
     jobs.parallel_for(g.h, 16, [&](i32 y0, i32 y1) {
         for (i32 y = y0; y < y1; ++y) {
             for (i32 x = 0; x < g.w; ++x) {
                 const size_t i = g.at(x, y);
-                const f32 px = (static_cast<f32>(x) + 0.5f) / kReliefScale, py = (static_cast<f32>(y) + 0.5f) / kReliefScale;
+                const f32 px = (static_cast<f32>(x) + 0.5f) / kReliefTexelsPerUnit, py = (static_cast<f32>(y) + 0.5f) / kReliefTexelsPerUnit;  // world units
                 const f32 ease = smoothstep(0.2f, 0.7f, gentle[i]);
                 // A little noise makes the cliff line wander. It moves the line
                 // only where levels are changing; flat ground snaps back to whole levels.
@@ -382,7 +385,7 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
     // Cavity: height relative to the neighbourhood average. Positive on ridges
     // and negative in valleys; the shader uses it to pick both out.
     std::vector<f32> blurred(n);
-    box_blur(g, height, blurred, kReliefScale + 1, jobs);
+    box_blur(g, height, blurred, kReliefTexelsPerUnit + 1, jobs);
 
     f32 top = 1.0e-3f;
     for (const f32 v : height) top = std::max(top, v);
@@ -401,8 +404,8 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
                 const f32 gy = (sample(x - 1, y + 1) + 2.0f * sample(x, y + 1) + sample(x + 1, y + 1)) -
                                (sample(x - 1, y - 1) + 2.0f * sample(x, y - 1) + sample(x + 1, y - 1));
                 // The kernel spans two texels and sums to 4 per unit slope.
-                const f32 per_tile = static_cast<f32>(kReliefScale) / 8.0f;
-                const f32 nx = -gx * per_tile, ny = -gy * per_tile;
+                const f32 per_unit = static_cast<f32>(kReliefTexelsPerUnit) / 8.0f;
+                const f32 nx = -gx * per_unit, ny = -gy * per_unit;
                 const f32 inv = 1.0f / std::sqrt(nx * nx + ny * ny + 1.0f);
                 const size_t i = g.at(x, y);
                 const auto signed_byte = [](f32 v) { return static_cast<u8>(clamp(v * 0.5f + 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f); };

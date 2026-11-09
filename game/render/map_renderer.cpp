@@ -38,7 +38,8 @@ uniform float uTime;
 uniform float uGrid;
 uniform int uOverlay;             // 0: none, 1: height levels, 2: passability
 uniform float uPixel;             // world units per screen pixel
-uniform float uHeightRange;       // tiles of height that relief.b == 1 stands for
+uniform float uHeightRange;       // world units of height that relief.b == 1 stands for
+uniform float uUnit;              // tiles per world unit
 out vec4 oColor;
 
 const float WATER = 0.0, SHALLOWS = 1.0, GRASS = 3.0, FOREST = 5.0, MOUNTAIN = 6.0, NOISE = 7.0;
@@ -117,7 +118,7 @@ void main() {
     float light = dot(n, LIGHT) / LIGHT.z;  // 1 on level ground
     // High ground towards the light throws a shadow: three steps of a ray march.
     // This is what makes a plateau read as raised: its far side drops into shade.
-    vec2 sunward = normalize(LIGHT.xy) / uMapSize;
+    vec2 sunward = normalize(LIGHT.xy) * uUnit / uMapSize;  // one world unit towards the light
     float rise1 = (texture(uRelief, mapUV + sunward * 0.6).b - relief.b) * uHeightRange;
     float rise2 = (texture(uRelief, mapUV + sunward * 1.5).b - relief.b) * uHeightRange;
     float rise3 = (texture(uRelief, mapUV + sunward * 2.8).b - relief.b) * uHeightRange;
@@ -236,6 +237,7 @@ void MapRenderer::init(JobSystem& jobs) {
     u_overlay_ = terrain_.uniform("uOverlay");
     u_pixel_ = terrain_.uniform("uPixel");
     u_height_range_ = terrain_.uniform("uHeightRange");
+    u_unit_ = terrain_.uniform("uUnit");
 
     glGenVertexArrays(1, &vao_);
     batch_.init();
@@ -259,6 +261,7 @@ void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
     relief_.create(relief.shape, TextureFilter::Linear, TextureWrap::Clamp);
     surface_.create(relief.surface, TextureFilter::Linear, TextureWrap::Clamp);
     height_range_ = relief.height_range;
+    tiles_per_unit_ = static_cast<f32>(map.resolution);
 
     build_decor(map);
 }
@@ -373,6 +376,7 @@ void MapRenderer::draw(const Camera2D& camera, const MapDrawOptions& options) {
     glUniform1i(u_overlay_, static_cast<int>(options.overlay));
     glUniform1f(u_pixel_, inv_zoom);
     glUniform1f(u_height_range_, height_range_);
+    glUniform1f(u_unit_, tiles_per_unit_);
     tiles_.bind(0);
     relief_.bind(1);
     depth_.bind(2);

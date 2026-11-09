@@ -67,6 +67,7 @@ struct TileMap {
     i32 width = 0;
     i32 height = 0;
     u64 seed = 0;
+    i32 resolution = 1;        // tiles per world unit (see MapGenParams)
     IVec2 start;               // command centre location
     f32 sea_level = 0.0f;      // elevation below which tiles are lake
     f32 mountain_level = 1.0f; // elevation above which tiles are mountain

@@ -11,8 +11,8 @@ namespace zl {
 
 class JobSystem;
 
-// Relief texels per tile.
-inline constexpr i32 kReliefScale = 4;
+// Relief texels per world unit (see MapGenParams::resolution).
+inline constexpr i32 kReliefTexelsPerUnit = 4;
 
 struct Relief {
     // r, g: surface normal x, y (packed to 0..255). b: height. a: cavity, i.e.
@@ -22,7 +22,7 @@ struct Relief {
     // summit). g: how much of a cliff face this point is. b: height level, as a
     // fraction of the highest level, sloping across ramps.
     Image surface;
-    f32 height_range = 1.0f;  // height in tiles that shape.b == 1 stands for
+    f32 height_range = 1.0f;  // height in world units that shape.b == 1 stands for
 };
 
 Relief build_relief(const TileMap& map, JobSystem& jobs);
