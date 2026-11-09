@@ -1,0 +1,61 @@
+#include "gfx/texture.h"
+
+#include "gfx/gl.h"
+
+namespace zl {
+
+namespace {
+
+void set_sampling(GLenum target, TextureFilter filter, TextureWrap wrap) {
+    const GLint min_filter = filter == TextureFilter::Nearest ? GL_NEAREST : (filter == TextureFilter::Linear ? GL_LINEAR : GL_LINEAR_MIPMAP_LINEAR);
+    const GLint mag_filter = filter == TextureFilter::Nearest ? GL_NEAREST : GL_LINEAR;
+    const GLint wrap_mode = wrap == TextureWrap::Repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, min_filter);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter);
+    glTexParameteri(target, GL_TEXTURE_WRAP_S, wrap_mode);
+    glTexParameteri(target, GL_TEXTURE_WRAP_T, wrap_mode);
+    if (filter == TextureFilter::Trilinear) glGenerateMipmap(target);
+}
+
+}  // namespace
+
+Texture::~Texture() {
+    if (id_) glDeleteTextures(1, &id_);
+}
+
+void Texture::reset(u32 target) {
+    if (id_) glDeleteTextures(1, &id_);
+    glGenTextures(1, &id_);
+    target_ = target;
+    glBindTexture(target_, id_);
+}
+
+void Texture::create(const Image& image, TextureFilter filter, TextureWrap wrap) {
+    reset(GL_TEXTURE_2D);
+    width_ = image.width;
+    height_ = image.height;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.bytes());
+    set_sampling(GL_TEXTURE_2D, filter, wrap);
+}
+
+void Texture::create_array(const std::vector<Image>& layers, TextureFilter filter, TextureWrap wrap) {
+    ZL_CHECK(!layers.empty(), "texture array needs at least one layer");
+    reset(GL_TEXTURE_2D_ARRAY);
+    width_ = layers[0].width;
+    height_ = layers[0].height;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, width_, height_, static_cast<GLsizei>(layers.size()), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    for (size_t i = 0; i < layers.size(); ++i) {
+        ZL_CHECK(layers[i].width == width_ && layers[i].height == height_, "texture array layers must share one size");
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, static_cast<GLint>(i), width_, height_, 1, GL_RGBA, GL_UNSIGNED_BYTE, layers[i].bytes());
+    }
+    set_sampling(GL_TEXTURE_2D_ARRAY, filter, wrap);
+}
+
+void Texture::bind(u32 unit) const {
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(target_, id_);
+}
+
+}  // namespace zl
