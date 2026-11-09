@@ -33,31 +33,40 @@ show the sizes and layout, **not** the look. The look is defined here.
   there is nothing to specify. Do not invent them. The style rules below will
   apply to them when they are designed.
 
-## The look: plague art
+## The look: the plague years, as painters show them
 
-The reference is the imagery of the plague years in late-medieval and early
-modern Europe: woodcuts and engravings, plague broadsheets, the *danse
-macabre*, hand-tinted prints on yellowed paper.
+The reference is how artists have portrayed the time of the bubonic plague:
+Bruegel's *The Triumph of Death*, the dark plague paintings of the Renaissance
+and Baroque, and the grim medieval scenes of later history painting and modern
+illustration.
 
-The map is a land sickening under the plague. Grass is sallow and withered,
-trees are gaunt and half bare, water is still and murky, the sky is always
-overcast. Nothing is lush and nothing is clean.
+Across all of them the picture is the same. A barren, scorched land lies under
+a leaden, smoke-stained sky. There is mud, dead wood and still water. Shadows
+are deep and brown-black, the light is dull and sickly, and there is almost no
+colour except earth, bone and an occasional red.
 
-Every image should look as if it was **printed from a carved block and tinted
-by hand**: a heavy, slightly uneven ink line, shadows built from hatching, and
-thin washes of a few muted, earthy colours over it.
+The map is that land seen from above. Grass is sallow and withered, trees are
+gaunt and half bare, water is murky, and the light is always overcast. Nothing
+is lush and nothing is clean.
+
+Every image should look like **a small piece of a dark oil painting**: opaque
+paint and visible brushwork, a few sombre values, shadows that sink into warm
+near-black, and edges that are crisp where the light falls and lost where it
+does not.
 
 Two limits on that:
 
 - **The landscape is grim but quiet.** The player reads the terrain to choose
   where to defend, and later thousands of units will move across it, so the
   ground must never compete with what stands on it. The mood comes from colour
-  and line, not from clutter.
-- **No skulls, bones, corpses, graves or ruins in this batch.** The death
-  imagery of plague art belongs to the horde and the colony, which are not
-  designed yet. Here the land itself carries the mood, through blight.
+  and light, not from clutter.
+- **Only the objects listed here.** The things that define plague-era pictures
+  (plague doctors, death carts, pyres, crosses, crows, the dead) are not
+  scenery the game has a place for today: the renderer knows only the eleven
+  sprite families below. Do not add them to this batch. They are the motifs
+  the art for the horde and the colony should draw on once those are designed.
 
-The period sources are a reference for mood and technique. Do not copy any
+The paintings are a reference for mood, light and palette. Do not copy any
 specific artwork, and do not imitate the look of *They Are Billions* (which
 this game takes its gameplay from) or of any other game.
 
@@ -67,7 +76,7 @@ All 47 images are painted from this one small palette and mixes of it.
 
 | Name | Hex | Used for |
 |---|---|---|
-| Ink | `#1A1610` | outlines and hatching |
+| Soot | `#1A1610` | deepest shadow, dark edges |
 | Soot green | `#22332A` | conifers, deep shade |
 | Umber | `#6A5646` | earth, trunks |
 | Sallow olive | `#7C7E48` | grass and foliage |
@@ -79,7 +88,7 @@ All 47 images are painted from this one small palette and mixes of it.
 | Tarnished gold | `#D4A62A` | accent: gold ore only |
 
 - Nothing is more saturated than the three accents, and nothing is pure white
-  or pure black. Bone is the lightest value; ink is the darkest.
+  or pure black. Bone is the lightest value; soot is the darkest.
 - No clean blue and no fresh green anywhere.
 - The accents are rare on purpose. Dried blood and gold are the two colours
   the eye should find first on any screen, so they are reserved for things the
@@ -92,21 +101,23 @@ All 47 images are painted from this one small palette and mixes of it.
    uses the same light for the terrain (direction `(-0.50, -0.62, 0.60)`, with
    y pointing down the image), so a sprite lit from any other side will look
    pasted on.
-2. **Three flat tones and hatching.** Each material has a shadow tone, a base
-   tone and a light tone, laid down as flat washes with clean edges. Form is
-   then drawn over the shadow tone with ink hatching: parallel strokes 1 px
-   wide and 3 to 4 px apart, all running from upper right to lower left.
-   Cross-hatch only in the deepest shadow. No smooth gradients and no glossy
-   highlights.
-3. **A heavy, uneven ink outline.** 1 to 2 px at authoring size, in ink
-   `#1A1610`, thicker on the shaded lower-right side and thinner or broken on
-   the lit side, like a line cut into wood.
+2. **Painted in three or four values, with strong light and dark.** Each
+   material has a shadow, a base and a light value and at most a sparing
+   highlight, laid on as opaque brush strokes that follow the form: leaf
+   clumps, rock faces. Values may blend softly inside a form, but the shadow
+   side must be clearly darker than the lit side, sinking towards soot. That
+   contrast is what makes these paintings look the way they do. No airbrushed
+   gradients and no glossy highlights.
+3. **Dark edges, not outlines.** There is no uniform line around an object.
+   The shadow side ends in a dark edge of soot `#1A1610`, 1 to 2 px at
+   authoring size; the lit side meets the ground with no line at all. The
+   silhouette itself stays crisp: paint may be soft inside the shape, never
+   feathered at its border.
 4. **Readable when small.** The camera zooms out until the whole map fits and
    in to 128 screen pixels per tile; the default is 32. Check every image at
    8, 16, 32 and 64 pixels per tile. Each sprite must be recognisable from its
-   silhouette alone at 16. Hatching will blur into a flat tone when small, so
-   the shadow wash under it has to do the job by itself: never rely on the
-   hatching alone to show shade.
+   silhouette alone at 16. Brushwork blurs away when small, so the big light
+   and dark shapes have to carry each sprite by themselves.
 5. **Function before decoration.** Things that block movement (trees, boulders,
    ore deposits) look solid and tall, with a clear shadow. Things that do not
    (bushes, tufts, flowers, pebbles, reeds) look low and light. The player
@@ -149,7 +160,7 @@ These facts explain most of the constraints below.
 - **Seamless on all four edges.** Tile it 3 × 3 and look for seams.
 - **No visible repeat.** The texture repeats every 8 tiles, so nothing in it
   may be larger than about one tile (32 px) or stand out from its neighbours:
-  no single big stone, no dark patch, no long crack, no paper stain. Keep
+  no single big stone, no dark patch, no long crack. Keep
   detail even across the whole image.
 - **Flat lighting.** No directional light, no gradients, no baked shadows of
   other objects. The shader adds all of that. The one exception is small
@@ -158,9 +169,9 @@ These facts explain most of the constraints below.
   texture that is much brighter, darker or more saturated than its palette
   shifts the whole map. Keep the average colour between the two values given.
 - **Low contrast.** Roughly ±10% around the average. The ground is a backdrop.
-- **Print grain, not paint.** Detail is made of short ink flecks, stipple and
-  fine hatch marks over a flat wash, as in a tinted woodcut. Keep the marks
-  small (1 to 4 px), evenly spread and faint. No heavy outlines on the ground.
+- **Painted grain.** Detail is made of small dabs and short strokes of
+  slightly lighter and darker paint over a flat base. Keep the marks small
+  (1 to 4 px), evenly spread and faint. No dark edges on the ground.
 
 ### Grass
 
@@ -168,7 +179,7 @@ Open, buildable ground and the most common thing on screen.
 
 - **Palette:** `#6E7442` to `#8C8A50`, a sallow olive.
 - **Content:** thin, withered meadow grass. Soft mottling a few tiles across,
-  and short vertical ink strokes that read as dry blades. No flowers, weeds or
+  and short vertical strokes that read as dry blades. No flowers, weeds or
   stones; sprites add those.
 - **Watch for:** the shader shifts grass towards straw on dry ground and
   towards grey-green on wet ground. Keep the texture between the two, and keep
@@ -183,7 +194,7 @@ edges of groves, and everywhere at far zoom.
 - **Palette:** `#2E3324` to `#454430`, with patches of rotting leaf litter
   `#4E3E28`.
 - **Content:** dark, damp ground under a dying wood: leaf mould, moss, litter.
-  Denser stipple than any other texture. No trunks, roots or logs.
+  The most densely textured of the set. No trunks, roots or logs.
 - **Watch for:** it must be clearly darker than grass so that groves read as
   dark masses when the tree sprites are not drawn.
 
@@ -231,7 +242,7 @@ brightened 2× and tinted warm.
 - **Palette:** neutral grey centred on `#84827E`, close to 50% brightness.
   This one stays neutral whatever the rest of the palette does.
 - **Content:** fine stone grain, hairline cracks and thin near-horizontal
-  strata lines, drawn as engraved hatching.
+  strata lines.
 - **Watch for:** no hue, and nothing brighter than about 55% grey, because
   cliffs double the value and anything brighter clips to white. It has to look
   right both at one repeat per 8 tiles (mountains) and one per 4 tiles
@@ -279,6 +290,11 @@ the new textures are in:
 The moisture tint on grass, the warm tint on cliff faces and the paler tone of
 high ground can stay as they are.
 
+The leaden sky and smoke haze of the reference paintings cannot come from the
+images either. A slight overall grade in the shader (a little less saturation
+and a thin warm-grey haze) would supply it, and is worth trying in the same
+code change.
+
 ## Sprites
 
 ### Shared requirements
@@ -290,9 +306,9 @@ high ground can stay as they are.
   up as halos once the atlas is mipmapped.
 - The object's base (the bottom of a trunk, the middle of a rock's footprint)
   sits on the **anchor** pixel listed, measured from the top-left corner.
-- **Contact shadow painted into the sprite:** a flat ellipse of ink `#1A1610`
-  at 35 to 45% opacity with a slightly soft edge, lying on the ground under the
-  object and pushed slightly to the lower right. It is wide and flat, about
+- **Contact shadow painted into the sprite:** a soft ellipse of soot `#1A1610`
+  at 35 to 45% opacity in the middle, fading to nothing at its edge, lying on
+  the ground under the object and pushed slightly to the lower right. It is wide and flat, about
   2.5 times wider than tall. Tufts, flowers and reeds have no shadow.
 - Variants of a family share the canvas size, the anchor, the palette and the
   overall mass. They differ in silhouette. Because sprites are never mirrored,
@@ -322,10 +338,10 @@ overlap into a continuous canopy. Lone trees also stand in open grass.
 
 - **Shape:** a gnarled, sickly tree. The crown is a ragged mass of five to
   seven leaf clumps, slightly wider than tall, with a few bare, crooked branch
-  tips breaking out of its outline. The trunk is short, dark and twisted, and
+  tips breaking out of its silhouette. The trunk is short, dark and twisted, and
   shows for about a fifth of the height.
-- **Shading:** three tones and a sparing highlight, with the lightest clumps
-  at the upper left. The lower-right clumps carry the hatching.
+- **Shading:** three values and a sparing highlight, with the lightest clumps
+  at the upper left. The lower-right clumps fall into deep shadow.
 - **Palettes:** three, two variants each, so a forest is a patchwork of sick
   colours and not one flat tone.
 
@@ -335,7 +351,7 @@ overlap into a continuous canopy. Lone trees also stand in open grass.
   | B, jaundiced ochre | `#3A3018` | `#665426` | `#927A36` | `#B8A254` |
   | C, blighted rust | `#34201A` | `#5E3626` | `#8A5234` | `#AE7A4C` |
 
-  Outline in ink. Trunk `#4A3A2C` on the lit side, `#2A2019` in shade.
+  Trunk `#4A3A2C` on the lit side, `#2A2019` in shade.
 - **Variants:** variants 0 to 2 keep a full crown. Variants 3 to 5 are further
   gone: a thinner crown with more bare limbs showing, but still a solid mass.
 - **Watch for:** the canopy is the main thing. It has to look good as a mass of
@@ -352,9 +368,9 @@ altitude, and the two mix along the boundary.
   with a ragged, saw-toothed lower edge, on a short trunk. A dead lower bough
   or two may hang bare. Clearly taller and narrower than the broadleaf, with a
   pointed top.
-- **Shading:** three tones. Light on the left of each tier, and the underside
-  of each tier in hatched shadow so the tiers separate.
-- **Palette:** shadow `#141E1A`, base `#22332A`, light `#3A4C38`. Outline
+- **Shading:** three values. Light on the left of each tier, and the underside
+  of each tier in deep shadow so the tiers separate.
+- **Palette:** shadow `#141E1A`, base `#22332A`, light `#3A4C38`. Dark edge
   `#0C1210`. Nearly black, and the only cold colour on land, so the two kinds
   of forest can be told apart at a glance.
 - **Variants:** vary the lean of the trunk by a pixel or two and the raggedness
@@ -383,7 +399,8 @@ important readability requirement in this brief.
 
 All three share one form: a pile of three or four angular, faceted rocks with
 flat tops, seen slightly from above, the nearer rocks overlapping the further
-ones. Shaded facets are hatched. They differ in colour.
+ones. Each facet is one flat stroke of paint, lit or shaded as a plane. They
+differ in colour.
 
 - **Stone:** pale, chalky, bone-grey rock, `#A6A29A`, with lit facets close to
   bone `#D8CFB4`. The cleanest and brightest of the three.
@@ -406,7 +423,7 @@ the small features a colony has to build around.
 - **Shape:** one big rounded-angular boulder, in some variants with a smaller
   one in front of it. Heavier, rounder and darker than a deposit.
 - **Palette:** dark weathered grey-brown `#6E685C`, blotched with sickly
-  lichen `#8A8A4E`. Outline in ink.
+  lichen `#8A8A4E`.
 - **Variants:** two with a single boulder, two with a pair.
 
 ### Tuft
@@ -417,8 +434,8 @@ engine tints it warmer.
 - **Shape:** five to seven thin blades spreading from one root point, the
   outer ones shorter and leaning outward, some bent or broken.
 - **Palette:** blades between `#5A5A30` and `#9A9258`, drier and more straw
-  than the grass under them. No outline and no shadow; at this size they would
-  swallow the sprite.
+  than the grass under them. No dark edge and no shadow; at this size they
+  would swallow the sprite.
 
 ### Flower
 
@@ -450,7 +467,7 @@ where the engine tints them cooler and they read as stones standing out of the
 water.
 
 - **Shape:** small rounded stones, flat and low, with a faint shadow.
-- **Palette:** ash `#8A857A`, outline `#36322C`.
+- **Palette:** ash `#8A857A`, dark edge `#36322C`.
 - **Watch for:** clearly smaller and flatter than a boulder. Nobody should
   think a pebble blocks the way.
 
@@ -489,12 +506,13 @@ For `broadleaf`, variants 0 and 3 use palette A, 1 and 4 palette B, and 2 and
 - [ ] Every colour comes from the palette or a mix of it: no clean blue, no
       fresh green, no pure white or black.
 - [ ] Dried blood and gold appear only where this brief puts them.
-- [ ] Hatching runs upper right to lower left everywhere, and every sprite
-      still reads correctly at 16 px per tile, where the hatching has blurred
+- [ ] Every sprite has a clearly darker shadow side, no uniform outline, and
+      still reads correctly at 16 px per tile, where the brushwork has blurred
       away.
 - [ ] Stone, iron and gold can be told apart at 16 px per tile.
 - [ ] Blocking objects (trees, deposits, boulders) look solid; walkable ground
       cover does not.
-- [ ] No skulls, bones, corpses, graves or ruins.
+- [ ] Nothing is depicted beyond the eleven sprite families and seven ground
+      textures listed.
 - [ ] A contact sheet of all sprites on the grass texture, at 1× and 2×, is
       included for review.
