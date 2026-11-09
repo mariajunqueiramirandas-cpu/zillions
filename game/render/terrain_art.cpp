@@ -134,6 +134,13 @@ Image make_ground(Terrain terrain, i32 size, u32 seed) {
                     c = scale(c, 1.0f + pebbles(x, y, size, 8, 0.30f, 2.6f, seed + 6));
                     break;
                 }
+                case Terrain::Rocks: {
+                    // Gravel and broken stone between the boulders.
+                    c = mix(rgb(118, 108, 92), rgb(150, 140, 122), broad);
+                    c = scale(c, 0.90f + 0.12f * mid + 0.10f * (fine - 0.5f));
+                    c = scale(c, 1.0f + 1.3f * pebbles(x, y, size, 8, 0.55f, 3.0f, seed + 6));
+                    break;
+                }
                 case Terrain::Sand: {
                     // Faint wind ripples.
                     const f32 ripple = std::sin((v * 20.0f + 1.6f * broad + 0.5f * u) * 2.0f * kPi);
@@ -443,6 +450,20 @@ Canvas make_pebbles(Rng& rng) {
     return canvas;
 }
 
+// One or two large weathered boulders: the obstacle on an outcrop tile.
+Canvas make_boulder(Rng& rng) {
+    Canvas canvas(46, 44);
+    std::vector<Boulder> stones;
+    stones.push_back({rng.range(19.0f, 27.0f), rng.range(19.0f, 23.0f), rng.range(11.0f, 14.5f), rng.range(0.0f, 6.28f), rng.range(0.0f, 6.28f), rng.range(0.0f, 1.0f)});
+    if (rng.chance(0.6f)) {
+        stones.push_back({rng.range(10.0f, 36.0f), rng.range(27.0f, 31.0f), rng.range(5.5f, 8.5f), rng.range(0.0f, 6.28f), rng.range(0.0f, 6.28f), rng.range(0.0f, 1.0f)});
+    }
+    std::sort(stones.begin(), stones.end(), [](const Boulder& a, const Boulder& b) { return a.y < b.y; });
+    paint_shadow(canvas, 26.0f, 32.0f, 19.0f, 8.0f, 0.42f);
+    paint_boulders(canvas, stones, rgb(142, 134, 122), rgb(52, 48, 46), Resource::None, rng.next_u32());
+    return canvas;
+}
+
 // A fan of grass blades, optionally topped with flowers or seed heads.
 Canvas make_tuft(Rng& rng, int kind) {
     const bool reed = kind == 2;
@@ -532,7 +553,7 @@ TerrainArt build_terrain_art(JobSystem& jobs, u32 seed) {
         }
     });
 
-    enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed };
+    enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed, Boulder };
     struct Family {
         Kind kind;
         SpriteSet TerrainArt::* set;
@@ -546,6 +567,7 @@ TerrainArt build_terrain_art(JobSystem& jobs, u32 seed) {
         {Kind::Iron, &TerrainArt::iron, 3, 23.0f, 27.0f},           {Kind::Gold, &TerrainArt::gold, 3, 23.0f, 27.0f},
         {Kind::Tuft, &TerrainArt::tuft, 4, 10.0f, 14.0f},           {Kind::Flower, &TerrainArt::flower, 4, 10.0f, 14.0f},
         {Kind::Pebble, &TerrainArt::pebble, 3, 11.0f, 9.0f},        {Kind::Reed, &TerrainArt::reed, 3, 10.0f, 28.0f},
+        {Kind::Boulder, &TerrainArt::boulder, 4, 23.0f, 31.0f},
     };
     struct Item {
         const Family* family;
@@ -574,6 +596,7 @@ TerrainArt build_terrain_art(JobSystem& jobs, u32 seed) {
                     case Kind::Flower: return make_tuft(rng, 1);
                     case Kind::Pebble: return make_pebbles(rng);
                     case Kind::Reed: return make_tuft(rng, 2);
+                    case Kind::Boulder: return make_boulder(rng);
                 }
                 return Canvas(1, 1);
             }();

@@ -25,6 +25,10 @@ the colony.
 - **Height:** open land sits on three levels. Cliffs block movement; ramps are
   the only way between levels and can never be built on, so the routes stay
   open for both sides.
+- **Two scales of terrain:** lakes, ranges, cliffs and rivers are sized in
+  world units and shape the strategy. Copses, lone trees, boulder outcrops and
+  ponds are sized in tiles and shape the base: they are the small obstacles a
+  colony has to build around, and they keep any screenful of map busy.
 - **Resources on the map:** forests, and stone, iron and gold deposits where
   mountains meet open ground. Richer ores lie further from the colony.
 

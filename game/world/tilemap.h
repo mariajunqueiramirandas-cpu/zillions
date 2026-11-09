@@ -18,6 +18,7 @@ enum class Terrain : u8 {
     Dirt,
     Forest,    // trees block movement; harvested from adjacent tiles
     Mountain,
+    Rocks,     // boulder outcrop: a small obstacle on otherwise open ground
     Count
 };
 

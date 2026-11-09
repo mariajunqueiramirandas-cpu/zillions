@@ -41,6 +41,7 @@ Color preview_color(const TileMap& map, i32 x, i32 y) {
         case Terrain::Dirt: return lit(140, 118, 84);
         case Terrain::Forest: return lit(44, 92, 46);
         case Terrain::Mountain: return lit(112, 108, 104);
+        case Terrain::Rocks: return lit(150, 140, 126);
         case Terrain::Count: break;
     }
     return {255, 0, 255, 255};

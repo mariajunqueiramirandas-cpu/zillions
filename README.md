@@ -17,7 +17,7 @@ the horde are still to build.
 | | |
 |---|---|
 | ![Mountains](docs/screenshots/mountains.jpg) | ![Cliffs and ramps](docs/screenshots/cliffs-ramps.jpg) |
-| ![Start area](docs/screenshots/start-area.jpg) | ![River and forest](docs/screenshots/river-forest.jpg) |
+| ![Start area](docs/screenshots/start-area.jpg) | ![Open country](docs/screenshots/river-forest.jpg) |
 
 ## Building
 
@@ -118,6 +118,13 @@ The default is 512 × 512 tiles at 2 tiles per world unit. The same seed at
 `--size 256 --resolution 1` or `--size 1024 --resolution 4` is the same
 geography at half or twice the detail. Resolution must be 1, 2 or 4.
 
+Sizing everything in world units would leave a fine grid empty: the big
+features sit many tiles apart with bare ground between them. So a second layer
+of features is sized in tiles instead: stands of trees, lone trees, boulder
+outcrops, ponds, frayed wood edges, and grass interleaved with bare earth.
+Their density is per tile, which means a screenful of map holds about the same
+amount of them at any resolution. `MapGenParams::detail` scales that density.
+
 Noise is evaluated once per world unit and interpolated up to the tile grid,
 and the relief texture is laid out in world units too, so a finer grid costs
 far less than its tile count suggests.
@@ -146,15 +153,17 @@ A 1024 × 1024 map at the default resolution, four times the area of the default
    would otherwise ring every mountain, are lowered, and the start area is
    kept on a single level.
 7. **Terrain**: beaches along lakes, forest in groves biased to wet ground,
-   dry patches, scree at the foot of mountains.
-8. **Fords**: shallow crossings on narrow river reaches.
-9. **Ore**: stone, iron and gold where mountains meet open ground, richer ores
+   dry ground interleaved with turf, scree at the foot of mountains.
+8. **Small features**: ponds, boulder outcrops, stands of trees and lone
+   trees, scattered per tile (see above).
+9. **Fords**: shallow crossings on narrow river reaches.
+10. **Ore**: stone, iron and gold where mountains meet open ground, richer ores
    further out; stone and iron are guaranteed near the start.
-10. **Ramps**: slopes three world units wide cut into straight stretches of
+11. **Ramps**: slopes three world units wide cut into straight stretches of
     cliff, spaced well apart.
-11. **Connectivity**: any sizeable region the colony cannot reach is joined by
+12. **Connectivity**: any sizeable region the colony cannot reach is joined by
     the cheapest cut (a ford, a pass, a gap in the trees or a ramp).
-12. **Derived data**: walkable/buildable flags, water depth, statistics.
+13. **Derived data**: walkable/buildable flags, water depth, statistics.
 
 ### Height
 

@@ -22,6 +22,10 @@ struct MapGenParams {
     f32 uplands = 0.42f;    // fraction of open land raised above the lowlands; 0 gives a flat map
     f32 rivers = 1.0f;      // river density multiplier; 0 disables rivers
     f32 ore = 1.0f;         // ore deposit density multiplier
+    // Density multiplier for small features: copses, lone trees, boulder
+    // outcrops and ponds. These are sized in tiles, not world units, so a
+    // screenful of map holds about the same amount of them at any resolution.
+    f32 detail = 1.0f;
 };
 
 // Generates a complete map. Deterministic: the same parameters always produce

@@ -164,6 +164,7 @@ public:
         phase("mountains", &Generator::mountains);
         phase("height levels", &Generator::levels);
         phase("classify", &Generator::classify);
+        phase("small features", &Generator::small_features);
         phase("fords", &Generator::fords);
         phase("deposits", &Generator::deposits);
         phase("ramps", &Generator::ramps);
@@ -688,7 +689,7 @@ private:
             moist = saturate(moist * 0.8f + 0.3f * std::exp(-to_water[static_cast<size_t>(i)] / (5.0f * rf_)));
         }
 
-        const u32 s_beach = seed(9);
+        const u32 s_beach = seed(9), s_fray = seed(17), s_mottle = seed(22);
         std::vector<f32> forest_score(static_cast<size_t>(n_), -kInf);
         std::vector<f32> scores, dryness;
         scores.reserve(static_cast<size_t>(n_));
@@ -713,8 +714,11 @@ private:
                 // Trees grow in groves (mid-frequency noise) biased to wet ground,
                 // and thin out towards the colony so there is room to build.
                 const f32 d = start_dist(x, y);
-                const f32 clearing = 1.0f - smoothstep(kStartClear, kStartFlat + 6.0f, d);
-                forest_score[i] = 0.55f * m_.moisture[i] + 0.45f * (0.5f + 0.5f * grove_[i]) - 0.6f * clearing;
+                const f32 clearing = 1.0f - smoothstep(kStartClear, kStartFlat + 3.0f, d);
+                // A last octave at the scale of a few tiles frays the edge of
+                // every wood into bays, spurs and outlying stands.
+                const f32 fray = fbm2(static_cast<f32>(x) / 7.0f, static_cast<f32>(y) / 7.0f, s_fray, 2);
+                forest_score[i] = 0.55f * m_.moisture[i] + 0.45f * (0.5f + 0.5f * grove_[i]) + 0.07f * fray - 0.6f * clearing;
                 scores.push_back(forest_score[i]);
                 dryness.push_back(m_.moisture[i]);
             }
@@ -725,9 +729,16 @@ private:
         for (i32 i = 0; i < n_; ++i) {
             const size_t k = static_cast<size_t>(i);
             if (forest_score[k] == -kInf) continue;
-            if (forest_score[k] >= forest_cut) m_.terrain[k] = Terrain::Forest;
-            else if (m_.moisture[k] < dry_cut) m_.terrain[k] = Terrain::Dirt;
-            else m_.terrain[k] = Terrain::Grass;
+            if (forest_score[k] >= forest_cut) {
+                m_.terrain[k] = Terrain::Forest;
+                continue;
+            }
+            // Dry ground and turf interleave at the scale of a few tiles: grass
+            // creeps into the bare patches and bare earth shows through the grass.
+            const f32 x = static_cast<f32>(i % w_), y = static_cast<f32>(i / w_);
+            const f32 mottle = fbm2(x / 8.0f, y / 8.0f, s_mottle, 2);
+            const bool bare = m_.moisture[k] + 0.09f * mottle < dry_cut || fbm2(x / 6.0f, y / 6.0f, s_mottle + 1, 2) > 0.70f;
+            m_.terrain[k] = bare ? Terrain::Dirt : Terrain::Grass;
         }
 
         // Scree: bare ground along the foot of mountains.
@@ -735,6 +746,98 @@ private:
             for (i32 x = 0; x < w_; ++x) {
                 const size_t i = at(x, y);
                 if (m_.terrain[i] == Terrain::Grass && to_rock_[i] <= 1.5f * rf_ && unit(x, y, 10) <= 0.6f) m_.terrain[i] = Terrain::Dirt;
+            }
+        }
+    }
+
+    // --- small features ---------------------------------------------------
+
+    // Calls place(x, y, hash) for a scattering of points: the map is divided
+    // into square cells and each cell offers one jittered point with the given
+    // chance, which spaces features out without a visible grid.
+    template <class Fn>
+    void scatter(i32 cell, f32 chance, u32 stream, Fn&& place) {
+        const u32 s = seed(stream);
+        for (i32 cy = 0; cy * cell < h_; ++cy) {
+            for (i32 cx = 0; cx * cell < w_; ++cx) {
+                const u32 h = hash2(cx, cy, s);
+                if (hash_to_unit(h) >= chance) continue;
+                const i32 x = cx * cell + static_cast<i32>(hash32(h + 1) % static_cast<u32>(cell));
+                const i32 y = cy * cell + static_cast<i32>(hash32(h + 2) % static_cast<u32>(cell));
+                if (inside(x, y)) place(x, y, hash32(h + 3));
+            }
+        }
+    }
+
+    // Visits the tiles of a ragged blob about `radius` tiles across, or does
+    // nothing if `allowed` rejects any tile of the blob or its one-tile margin.
+    template <class Allowed, class Visit>
+    void blob(i32 x, i32 y, f32 radius, u32 h, Allowed&& allowed, Visit&& visit) {
+        const i32 reach = static_cast<i32>(std::ceil(radius)) + 1;
+        const auto within = [&](i32 ox, i32 oy, f32 extra) {
+            const f32 ragged = (hash_to_unit(hash2(x + ox, y + oy, h)) - 0.5f) * 0.9f;
+            return std::sqrt(static_cast<f32>(ox * ox + oy * oy)) + ragged <= radius + extra;
+        };
+        for (i32 oy = -reach; oy <= reach; ++oy) {
+            for (i32 ox = -reach; ox <= reach; ++ox) {
+                if (within(ox, oy, 1.0f) && (!inside(x + ox, y + oy) || !allowed(static_cast<i32>(at(x + ox, y + oy))))) return;
+            }
+        }
+        for (i32 oy = -reach; oy <= reach; ++oy) {
+            for (i32 ox = -reach; ox <= reach; ++ox) {
+                if (within(ox, oy, 0.0f)) visit(static_cast<i32>(at(x + ox, y + oy)), within(ox, oy, -1.0f));
+            }
+        }
+    }
+
+    // The steps so far shape the land in world units, so on a fine grid their
+    // features sit many tiles apart and the ground between them is bare. This
+    // step fills it in with features sized in tiles: stands of trees, lone
+    // trees, boulder outcrops and ponds. Their density is per tile, so a
+    // screenful of map holds about the same amount of them at any resolution.
+    void small_features() {
+        if (p_.detail <= 0.0f) return;
+        const f32 density = std::min(p_.detail, 2.0f);
+        const auto ground = [&](i32 i) {
+            const Terrain t = m_.terrain[static_cast<size_t>(i)];
+            return (t == Terrain::Grass || t == Terrain::Dirt) && m_.resource[static_cast<size_t>(i)] == Resource::None;
+        };
+        const auto unit_of = [](u32 h, u32 k) { return hash_to_unit(hash32(h + k)); };
+
+        // Ponds, on wetter ground. A map asked to have no water gets none.
+        scatter(38, p_.water > 0.0f ? 0.60f * density : 0.0f, 18, [&](i32 x, i32 y, u32 h) {
+            const i32 c = static_cast<i32>(at(x, y));
+            if (m_.moisture[static_cast<size_t>(c)] < 0.36f || start_dist(x, y) < kStartFlat + 2.0f) return;
+            const u8 here = level(c);
+            blob(x, y, lerp(1.5f, 3.0f, unit_of(h, 1)), h, [&](i32 i) { return ground(i) && level(i) == here; },
+                 [&](i32 i, bool) { m_.terrain[static_cast<size_t>(i)] = Terrain::Water; });
+        });
+
+        // Boulder outcrops, commoner on dry ground, with a skirt of bare earth.
+        scatter(21, 0.70f * density, 19, [&](i32 x, i32 y, u32 h) {
+            const i32 c = static_cast<i32>(at(x, y));
+            if (start_dist(x, y) < kStartFlat || unit_of(h, 2) < m_.moisture[static_cast<size_t>(c)] - 0.45f) return;
+            const u8 here = level(c);
+            blob(x, y, lerp(1.6f, 3.1f, unit_of(h, 1)), h, [&](i32 i) { return ground(i) && level(i) == here && !is_ramp(i); },
+                 [&](i32 i, bool core) { m_.terrain[static_cast<size_t>(i)] = core ? Terrain::Rocks : Terrain::Dirt; });
+        });
+
+        // Stands of a few trees out in the open, unless the map is treeless.
+        const f32 trees = p_.forest > 0.0f ? density : 0.0f;
+        scatter(15, 0.55f * trees, 20, [&](i32 x, i32 y, u32 h) {
+            if (start_dist(x, y) < kStartClear + 2.0f) return;
+            blob(x, y, lerp(0.9f, 3.2f, unit_of(h, 1) * unit_of(h, 4)), h, [&](i32 i) { return ground(i) || m_.terrain[static_cast<size_t>(i)] == Terrain::Forest; },
+                 [&](i32 i, bool) { m_.terrain[static_cast<size_t>(i)] = Terrain::Forest; });
+        });
+
+        // Lone trees.
+        const u32 s_lone = seed(21);
+        for (i32 y = 0; y < h_; ++y) {
+            for (i32 x = 0; x < w_; ++x) {
+                const size_t i = at(x, y);
+                if (m_.terrain[i] == Terrain::Grass && hash_to_unit(hash2(x, y, s_lone)) < 0.010f * trees && start_dist(x, y) > kStartClear + 1.0f) {
+                    m_.terrain[i] = Terrain::Forest;
+                }
             }
         }
     }
@@ -1047,6 +1150,7 @@ private:
                 case Terrain::Water: m_.terrain[k] = Terrain::Shallows; break;
                 case Terrain::Forest: m_.terrain[k] = Terrain::Grass; break;
                 case Terrain::Mountain: m_.terrain[k] = Terrain::Dirt; break;
+                case Terrain::Rocks: m_.terrain[k] = Terrain::Dirt; break;
                 default: break;
             }
             ++m_.stats.carved_tiles;

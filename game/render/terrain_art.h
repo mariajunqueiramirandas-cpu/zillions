@@ -39,7 +39,7 @@ struct TerrainArt {
 
     SpriteSet broadleaf, conifer, bush;
     SpriteSet stone, iron, gold;
-    SpriteSet tuft, flower, pebble, reed;
+    SpriteSet tuft, flower, pebble, reed, boulder;
 };
 
 TerrainArt build_terrain_art(JobSystem& jobs, u32 seed = 7);

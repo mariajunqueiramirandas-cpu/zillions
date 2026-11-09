@@ -6,6 +6,7 @@
 
 #include "core/rng.h"
 #include "gfx/gl.h"
+#include "math/noise.h"
 #include "render/relief.h"
 
 namespace zl {
@@ -15,6 +16,9 @@ namespace {
 // Below this many pixels per tile, scenery sprites are smaller than a couple
 // of pixels and the ground shader alone carries the picture.
 constexpr f32 kDecorMinZoom = 2.5f;
+
+// The terrain shader hard-codes the texture-array layer that holds noise.
+static_assert(kNoiseLayer == 8, "update NOISE in the terrain shader");
 
 const char* kTerrainVertex = R"(#version 330 core
 void main() {
@@ -42,7 +46,7 @@ uniform float uHeightRange;       // world units of height that relief.b == 1 st
 uniform float uUnit;              // tiles per world unit
 out vec4 oColor;
 
-const float WATER = 0.0, SHALLOWS = 1.0, GRASS = 3.0, FOREST = 5.0, MOUNTAIN = 6.0, NOISE = 7.0;
+const float WATER = 0.0, SHALLOWS = 1.0, GRASS = 3.0, FOREST = 5.0, MOUNTAIN = 6.0, NOISE = 8.0;
 const float GROUND_SCALE = 1.0 / 8.0;
 const vec3 LIGHT = vec3(-0.5013, -0.6216, 0.6016);
 const vec3 BACKDROP = vec3(0.030, 0.036, 0.046);
@@ -88,7 +92,9 @@ void main() {
     vec4 relief = texture(uRelief, mapUV);
     vec4 surface = texture(uSurface, mapUV);
     vec4 hydro = texture(uDepth, mapUV);
-    float moisture = hydro.g;
+    // Patches a dozen tiles across shift the grass between dry and lush tones,
+    // so open ground is not one flat green.
+    float moisture = clamp(hydro.g + (texture(uGround, vec3(p / 15.0, NOISE)).g - 0.5) * 0.8, 0.0, 1.0);
 
     float water = dot(w, vec4(equal(id, vec4(WATER))));
     float shallows = dot(w, vec4(equal(id, vec4(SHALLOWS))));
@@ -176,7 +182,7 @@ void main() {
         float strength;
         if (uOverlay == 1) {
             tint = ramp ? vec3(1.0) : (level == 0 ? vec3(0.20, 0.45, 0.92) : (level == 1 ? vec3(0.98, 0.80, 0.20) : vec3(0.92, 0.30, 0.22)));
-            strength = kind == 0 || kind == 6 ? 0.0 : (walkable ? 0.50 : 0.22);
+            strength = kind == 0 || kind == 6 ? 0.0 : (walkable ? 0.50 : 0.22);  // not on water or mountain
         } else {
             tint = ramp ? vec3(0.20, 0.90, 0.95) : (buildable ? vec3(0.25, 0.85, 0.30) : (walkable ? vec3(0.95, 0.85, 0.25) : vec3(0.90, 0.20, 0.20)));
             strength = 0.42;
@@ -324,23 +330,34 @@ void MapRenderer::build_decor(const TileMap& map) {
                     }
                     break;
                 }
+                case Terrain::Rocks: {
+                    add(art_.boulder, h3, cx + (r0 - 0.5f) * 0.5f, cy + 0.25f + (r1 - 0.5f) * 0.4f, 0.85f + 0.45f * r2, tint(0.88f + 0.12f * r3, 0.02f));
+                    break;
+                }
                 case Terrain::Grass: {
                     bool waterside = false;
                     for (int k = 0; k < 4 && !waterside; ++k) {
                         const i32 nx = x + (k == 0) - (k == 1), ny = y + (k == 2) - (k == 3);
                         waterside = map.in_bounds(nx, ny) && map.terrain[static_cast<size_t>(map.index(nx, ny))] == Terrain::Water;
                     }
+                    // Ground cover grows in drifts rather than evenly: flower
+                    // meadows, thickets of shrubs and swathes of long grass.
+                    const f32 flowers = 0.015f + 0.34f * smoothstep(0.35f, 0.80f, simplex2(cx / 9.0f, cy / 9.0f, seed + 1u));
+                    const f32 shrubs = 0.006f + 0.16f * smoothstep(0.45f, 0.85f, simplex2(cx / 11.0f, cy / 11.0f, seed + 2u));
+                    const f32 grass = 0.07f + 0.34f * smoothstep(0.10f, 0.70f, simplex2(cx / 6.0f, cy / 6.0f, seed + 3u));
                     const f32 gx = cx + (r1 - 0.5f) * 0.8f, gy = cy + (r2 - 0.5f) * 0.8f;
                     if (waterside && r0 < 0.45f) add(art_.reed, h3, gx, gy, 0.9f + 0.3f * r3, tint(0.95f, 0.0f));
-                    else if (r0 < 0.012f) add(art_.bush, h3, gx, gy, 0.9f + 0.4f * r3, tint(0.9f + 0.1f * r3, 0.0f));
-                    else if (r0 < 0.040f) add(art_.flower, h3, gx, gy, 0.9f + 0.3f * r3, tint(1.0f, 0.0f));
-                    else if (r0 < 0.130f) add(art_.tuft, h3, gx, gy, 0.8f + 0.4f * r3, tint(0.92f + 0.08f * r3, 0.0f));
+                    else if (r0 < shrubs) add(art_.bush, h3, gx, gy, 0.9f + 0.4f * r3, tint(0.9f + 0.1f * r3, 0.0f));
+                    else if (r0 < shrubs + flowers) add(art_.flower, h3, gx, gy, 0.9f + 0.3f * r3, tint(1.0f, 0.0f));
+                    else if (r0 < shrubs + flowers + grass) add(art_.tuft, h3, gx, gy, 0.8f + 0.4f * r3, tint(0.92f + 0.08f * r3, 0.0f));
                     break;
                 }
-                case Terrain::Dirt:
-                    if (r0 < 0.07f) add(art_.pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.5f * r3, tint(0.95f, 0.04f));
-                    else if (r0 < 0.10f) add(art_.tuft, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.3f * r3, tint(0.9f, 0.08f));
+                case Terrain::Dirt: {
+                    const f32 stones = 0.04f + 0.22f * smoothstep(0.30f, 0.80f, simplex2(cx / 7.0f, cy / 7.0f, seed + 4u));
+                    if (r0 < stones) add(art_.pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.5f * r3, tint(0.95f, 0.04f));
+                    else if (r0 < stones + 0.05f) add(art_.tuft, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.3f * r3, tint(0.9f, 0.08f));
                     break;
+                }
                 case Terrain::Sand:
                     if (r0 < 0.03f) add(art_.pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.7f + 0.4f * r3, tint(1.0f, 0.03f));
                     break;

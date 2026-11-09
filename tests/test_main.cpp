@@ -186,7 +186,7 @@ void check_map_invariants(const TileMap& map, const MapGenParams& params) {
             if (t == Terrain::Forest && d <= 40.0f) forest_near = true;
 
             // Flags agree with what the tile is.
-            const bool blocked = t == Terrain::Water || t == Terrain::Forest || t == Terrain::Mountain || map.resource[i] != Resource::None;
+            const bool blocked = t == Terrain::Water || t == Terrain::Forest || t == Terrain::Mountain || t == Terrain::Rocks || map.resource[i] != Resource::None;
             CHECK(((f & TileFlag::Walkable) != 0) == !blocked);
             if (f & TileFlag::Buildable) CHECK((f & TileFlag::Walkable) != 0 && t != Terrain::Shallows && !(f & TileFlag::Ramp));
             if (f & TileFlag::Ramp) CHECK((f & TileFlag::Walkable) != 0);

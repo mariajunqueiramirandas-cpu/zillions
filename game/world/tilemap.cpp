@@ -11,6 +11,7 @@ const char* terrain_name(Terrain t) {
         case Terrain::Dirt: return "dirt";
         case Terrain::Forest: return "forest";
         case Terrain::Mountain: return "mountain";
+        case Terrain::Rocks: return "rocks";
         case Terrain::Count: break;
     }
     return "?";
