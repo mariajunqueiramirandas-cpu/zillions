@@ -29,6 +29,7 @@ void main() {
 const char* kTerrainFragment = R"(#version 330 core
 uniform sampler2D uTiles;         // r: terrain id, g: resource id (point sampled)
 uniform sampler2D uRelief;        // rg: surface normal, b: height, a: cavity (ridge > 0.5 > valley)
+uniform sampler2D uSurface;       // r: mountain altitude, g: cliff face, b: height level
 uniform sampler2D uDepth;         // r: distance from water to shore, g: moisture
 uniform sampler2DArray uGround;   // one tiling texture per terrain, then noise
 uniform vec2 uMapSize;
@@ -36,7 +37,6 @@ uniform vec4 uWorld;              // world = gl_FragCoord.xy * xy + zw
 uniform float uTime;
 uniform float uGrid;
 uniform float uPixel;             // world units per screen pixel
-uniform float uMountainHeight;    // relief height at which mountains begin
 uniform float uHeightRange;       // tiles of height that relief.b == 1 stands for
 out vec4 oColor;
 
@@ -84,6 +84,7 @@ void main() {
     s /= s.x + s.y + s.z + s.w;
 
     vec4 relief = texture(uRelief, mapUV);
+    vec4 surface = texture(uSurface, mapUV);
     vec4 hydro = texture(uDepth, mapUV);
     float moisture = hydro.g;
 
@@ -113,21 +114,25 @@ void main() {
     vec3 n = vec3(relief.rg * 2.0 - 1.0, 0.0);
     n.z = sqrt(max(0.0, 1.0 - dot(n.xy, n.xy)));
     float light = dot(n, LIGHT) / LIGHT.z;  // 1 on level ground
-    // High ground towards the light throws a shadow: two steps of a ray march.
+    // High ground towards the light throws a shadow: three steps of a ray march.
+    // This is what makes a plateau read as raised: its far side drops into shade.
     vec2 sunward = normalize(LIGHT.xy) / uMapSize;
-    float near = (texture(uRelief, mapUV + sunward * 0.7).b - relief.b) * uHeightRange;
-    float far = (texture(uRelief, mapUV + sunward * 1.8).b - relief.b) * uHeightRange;
-    float shadow = max(smoothstep(0.30, 0.95, near), smoothstep(0.75, 2.2, far));
+    float rise1 = (texture(uRelief, mapUV + sunward * 0.6).b - relief.b) * uHeightRange;
+    float rise2 = (texture(uRelief, mapUV + sunward * 1.5).b - relief.b) * uHeightRange;
+    float rise3 = (texture(uRelief, mapUV + sunward * 2.8).b - relief.b) * uHeightRange;
+    float shadow = max(max(smoothstep(0.25, 0.80, rise1), smoothstep(0.60, 1.40, rise2)), smoothstep(1.20, 2.30, rise3));
     // Ridges catch the light and valleys hold shade, beyond what the slope alone gives.
     float cavity = clamp((relief.a - 0.5) * 2.0, -1.0, 1.0);
-    float shade = clamp(1.0 + (light - 1.0) * mix(0.42, 0.90, rock), 0.69, 1.27);
-    shade *= (1.0 - 0.24 * shadow) * (1.0 + 0.28 * cavity * rock);
+    float cliff = surface.g;
+    float shade = clamp(1.0 + (light - 1.0) * mix(0.42, 0.90, max(rock, cliff)), 0.69, 1.27);
+    // On open ground the same term brightens the rim of a plateau and darkens the foot of its cliff.
+    shade *= (1.0 - 0.38 * shadow) * (1.0 + cavity * mix(0.20, 0.28, rock));
     shade *= 0.90 + 0.22 * broad.b;  // large-scale tonal variation hides texture repeats
     // Painterly light on rock: warm where lit, cool in shade.
     vec3 rockLight = mix(vec3(0.84, 0.90, 1.02), vec3(1.05, 1.00, 0.92), smoothstep(0.70, 1.20, light));
 
     // Rock is tinted by altitude: scrubby lower slopes, grey flanks, pale summits.
-    float altitude = clamp((relief.b - uMountainHeight) / max(1.0 - uMountainHeight, 1e-3), 0.0, 1.0);
+    float altitude = surface.r;
     vec3 rockTint = mix(mix(vec3(0.92, 0.88, 0.72), vec3(1.02, 1.00, 0.96), smoothstep(0.0, 0.30, altitude)),
                         vec3(1.20, 1.19, 1.20), smoothstep(0.30, 0.95, altitude)) * rockLight;
     float scrub = (1.0 - smoothstep(0.03, 0.20, altitude + (noise.b - 0.5) * 0.10)) * (0.35 + 0.5 * moisture);
@@ -135,13 +140,19 @@ void main() {
 
     // Damp, darker ground at the water's edge.
     float damp = smoothstep(0.08, 0.5, water + shallows);
-    float landShade = shade * (1.0 - 0.22 * damp);
+    // Higher ground is paler and drier in tone, which sets plateaus apart at a glance.
+    vec3 landShade = shade * (1.0 - 0.22 * damp) * mix(vec3(0.90, 0.95, 0.96), vec3(1.13, 1.09, 0.93), surface.b);
 
     vec3 color = vec3(0.0);
     color += s.x * (id.x == WATER ? waterColor : (id.x == SHALLOWS ? shallowColor : g0 * (id.x == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
     color += s.y * (id.y == WATER ? waterColor : (id.y == SHALLOWS ? shallowColor : g1 * (id.y == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
     color += s.z * (id.z == WATER ? waterColor : (id.z == SHALLOWS ? shallowColor : g2 * (id.z == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
     color += s.w * (id.w == WATER ? waterColor : (id.w == SHALLOWS ? shallowColor : g3 * (id.w == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
+
+    // Cliff faces are bare rock, banded along the slope like exposed strata.
+    float strata = 0.90 + 0.10 * sin(surface.b * 150.0 + noise.r * 5.0);
+    vec3 face = texture(uGround, vec3(uv * 2.0, MOUNTAIN)).rgb * 2.0 * vec3(0.72, 0.67, 0.58) * rockLight * strata;
+    color = mix(color, face * shade, cliff * (1.0 - smoothstep(0.2, 0.6, water)));
 
     // Foam breathing along the shoreline.
     float shore = smoothstep(0.30, 0.5, water) * (1.0 - smoothstep(0.5, 0.82, water)) * (1.0 - smoothstep(0.0, 0.3, shallows));
@@ -184,12 +195,12 @@ void MapRenderer::init(JobSystem& jobs) {
     glUniform1i(terrain_.uniform("uRelief"), 1);
     glUniform1i(terrain_.uniform("uDepth"), 2);
     glUniform1i(terrain_.uniform("uGround"), 3);
+    glUniform1i(terrain_.uniform("uSurface"), 4);
     u_world_ = terrain_.uniform("uWorld");
     u_map_size_ = terrain_.uniform("uMapSize");
     u_time_ = terrain_.uniform("uTime");
     u_grid_ = terrain_.uniform("uGrid");
     u_pixel_ = terrain_.uniform("uPixel");
-    u_mountain_height_ = terrain_.uniform("uMountainHeight");
     u_height_range_ = terrain_.uniform("uHeightRange");
 
     glGenVertexArrays(1, &vao_);
@@ -211,8 +222,8 @@ void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
     depth_.create(hydro, TextureFilter::Linear, TextureWrap::Clamp);
 
     const Relief relief = build_relief(map, jobs);
-    relief_.create(relief.texture, TextureFilter::Linear, TextureWrap::Clamp);
-    mountain_height_ = relief.mountain_foot;
+    relief_.create(relief.shape, TextureFilter::Linear, TextureWrap::Clamp);
+    surface_.create(relief.surface, TextureFilter::Linear, TextureWrap::Clamp);
     height_range_ = relief.height_range;
 
     build_decor(map);
@@ -326,12 +337,12 @@ void MapRenderer::draw(const Camera2D& camera, const MapDrawOptions& options) {
     glUniform1f(u_time_, options.time);
     glUniform1f(u_grid_, options.grid ? 1.0f : 0.0f);
     glUniform1f(u_pixel_, inv_zoom);
-    glUniform1f(u_mountain_height_, mountain_height_);
     glUniform1f(u_height_range_, height_range_);
     tiles_.bind(0);
     relief_.bind(1);
     depth_.bind(2);
     ground_.bind(3);
+    surface_.bind(4);
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

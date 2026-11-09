@@ -133,7 +133,7 @@ TEST(camera_round_trips_and_zooms_about_a_point) {
 // --- map generation -----------------------------------------------------------
 
 bool same_map(const TileMap& a, const TileMap& b) {
-    return a.terrain == b.terrain && a.resource == b.resource && a.flags == b.flags && a.elevation == b.elevation &&
+    return a.level == b.level && a.terrain == b.terrain && a.resource == b.resource && a.flags == b.flags && a.elevation == b.elevation &&
            a.moisture == b.moisture && a.shore_dist == b.shore_dist;
 }
 
@@ -188,7 +188,11 @@ void check_map_invariants(const TileMap& map, const MapGenParams& params) {
             // Flags agree with what the tile is.
             const bool blocked = t == Terrain::Water || t == Terrain::Forest || t == Terrain::Mountain || map.resource[i] != Resource::None;
             CHECK(((f & TileFlag::Walkable) != 0) == !blocked);
-            if (f & TileFlag::Buildable) CHECK((f & TileFlag::Walkable) != 0 && t != Terrain::Shallows);
+            if (f & TileFlag::Buildable) CHECK((f & TileFlag::Walkable) != 0 && t != Terrain::Shallows && !(f & TileFlag::Ramp));
+            if (f & TileFlag::Ramp) CHECK((f & TileFlag::Walkable) != 0);
+            CHECK(map.level[i] < kHeightLevels);
+            // No cliff runs through the colony site.
+            if (d <= 10.0f) CHECK(map.level[i] == map.level[static_cast<size_t>(map.index(map.start.x, map.start.y))]);
             if (f & TileFlag::River) CHECK(t == Terrain::Water || t == Terrain::Shallows);
             CHECK((map.shore_dist[i] > 0) == (t == Terrain::Water));
             CHECK(map.elevation[i] >= 0.0f && map.elevation[i] <= 1.0f);
@@ -199,6 +203,33 @@ void check_map_invariants(const TileMap& map, const MapGenParams& params) {
     CHECK(stone_near);
     CHECK(forest_near);
     CHECK(resource_tiles > 0);
+
+    // Height: there is high ground, cliffs bound it and ramps lead up to it.
+    CHECK(s.level_tiles[1] > 0);
+    CHECK(s.cliff_edges > 0);
+    CHECK(s.ramps > 0);
+
+    // Walking tile to tile with can_step from the start reaches exactly the
+    // tiles the generator reported as reachable.
+    std::vector<u8> seen(static_cast<size_t>(map.tile_count()), 0);
+    std::vector<i32> frontier{map.index(map.start.x, map.start.y)};
+    seen[static_cast<size_t>(frontier[0])] = 1;
+    i32 reached = 0;
+    while (!frontier.empty()) {
+        const i32 i = frontier.back();
+        frontier.pop_back();
+        ++reached;
+        const i32 x = i % map.width, y = i / map.width;
+        const i32 next[4][2] = {{x + 1, y}, {x - 1, y}, {x, y + 1}, {x, y - 1}};
+        for (const auto& n : next) {
+            if (!map.in_bounds(n[0], n[1])) continue;
+            const i32 j = map.index(n[0], n[1]);
+            if (seen[static_cast<size_t>(j)] || !map.can_step(i, j)) continue;
+            seen[static_cast<size_t>(j)] = 1;
+            frontier.push_back(j);
+        }
+    }
+    CHECK(reached == s.reachable_tiles);
 }
 
 TEST(mapgen_invariants_hold_for_many_seeds) {
@@ -225,6 +256,14 @@ TEST(mapgen_handles_extreme_parameters) {
     CHECK(desert.stats.terrain_tiles[static_cast<int>(Terrain::Water)] == 0);
     CHECK(desert.stats.terrain_tiles[static_cast<int>(Terrain::Forest)] == 0);
     CHECK(desert.walkable(desert.start.x, desert.start.y));
+
+    MapGenParams flat;
+    flat.seed = 9;
+    flat.size = 128;
+    flat.uplands = 0.0f;
+    const TileMap plain = generate_map(flat, jobs);
+    CHECK(plain.stats.cliff_edges == 0 && plain.stats.ramps == 0);
+    CHECK(plain.stats.level_tiles[1] == 0 && plain.stats.level_tiles[2] == 0);
 
     MapGenParams harsh;
     harsh.seed = 6;

@@ -8,7 +8,8 @@ procedural map generator.
 
 | | |
 |---|---|
-| ![Mountains](docs/screenshots/mountains.jpg) | ![River and forest](docs/screenshots/river-forest.jpg) |
+| ![Mountains](docs/screenshots/mountains.jpg) | ![Cliffs and ramps](docs/screenshots/cliffs-ramps.jpg) |
+| ![Start area](docs/screenshots/start-area.jpg) | ![River and forest](docs/screenshots/river-forest.jpg) |
 
 ## Building
 
@@ -95,16 +96,33 @@ simulation can run in tests, tools and (later) a server.
    become river. Rivers therefore rise in high ground, merge, never run uphill
    and end in a lake or leave the map.
 5. **Mountains**: consolidated with a majority filter; specks are dropped.
-6. **Terrain**: beaches along lakes, forest in groves biased to wet ground,
+6. **Height levels**: smoothed elevation is cut into three flat levels at
+   percentiles, ledges too narrow to use are filtered out, and the start area
+   is kept on a single level.
+7. **Terrain**: beaches along lakes, forest in groves biased to wet ground,
    dry patches, scree at the foot of mountains.
-7. **Fords**: shallow crossings on narrow river reaches.
-8. **Ore**: stone, iron and gold where mountains meet open ground, richer ores
+8. **Fords**: shallow crossings on narrow river reaches.
+9. **Ore**: stone, iron and gold where mountains meet open ground, richer ores
    further out; stone and iron are guaranteed near the start.
-9. **Connectivity**: any sizeable region the colony cannot reach is joined by
-   the cheapest cut (a ford, a pass or a gap in the trees).
-10. **Derived data**: walkable/buildable flags, water depth, statistics.
+10. **Ramps**: slopes three tiles wide cut into straight stretches of cliff,
+    spaced well apart.
+11. **Connectivity**: any sizeable region the colony cannot reach is joined by
+    the cheapest cut (a ford, a pass, a gap in the trees or a ramp).
+12. **Derived data**: walkable/buildable flags, water depth, statistics.
 
-For rendering, mountains are then carved by an erosion model
+### Height
+
+Every tile has a height level (`TileMap::level`, 0 to 2). Two neighbouring
+tiles on different levels are separated by a cliff, which blocks movement
+unless one of them is a ramp. `TileMap::can_step(from, to)` is the single rule
+for this, and the generator's own reachability analysis uses it. Ramps are
+walkable but never buildable, so the routes between levels stay open.
+Mountains are separate from levels: they are impassable everywhere.
+
+Height does not affect combat or vision yet; those arrive with units and towers.
+
+For rendering, levels become terraces with rock-faced cliffs and sloping
+ramps, and mountains are carved by an erosion model
 (`game/render/relief.cpp`): drainage is routed from every mountain texel to the
 foot of its range, and heights are rebuilt upwards with a slope that shrinks as
 drainage area grows. Channels become valleys, divides become ridges, and the

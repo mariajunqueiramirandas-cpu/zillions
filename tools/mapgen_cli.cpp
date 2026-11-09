@@ -21,6 +21,8 @@ void print_stats(const TileMap& map) {
         std::printf("  %-9s %6d  %5.1f%%\n", terrain_name(static_cast<Terrain>(t)), s.terrain_tiles[t], 100.0 * s.terrain_tiles[t] / total);
     }
     std::printf("  deposits: %d stone, %d iron, %d gold\n", s.deposits[1], s.deposits[2], s.deposits[3]);
+    std::printf("  height: %d / %d / %d walkable tiles on levels 0 / 1 / 2; %d cliff edges, %d ramps\n", s.level_tiles[0], s.level_tiles[1],
+                s.level_tiles[2], s.cliff_edges, s.ramps);
     std::printf("  rivers: %d tiles, %d fords; %d tiles carved for connectivity\n", s.river_tiles, s.fords, s.carved_tiles);
     std::printf("  reachable: %d of %d walkable tiles (%.1f%%), %d map-edge entry tiles\n", s.reachable_tiles, s.walkable_tiles,
                 s.walkable_tiles ? 100.0 * s.reachable_tiles / s.walkable_tiles : 0.0, s.reachable_border_tiles);

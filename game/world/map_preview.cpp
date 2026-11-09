@@ -13,7 +13,19 @@ Color preview_color(const TileMap& map, i32 x, i32 y) {
         case Resource::Gold: return {246, 204, 60, 255};
         default: break;
     }
-    const f32 shade = 0.8f + 0.4f * map.elevation[i];
+    if (map.flags[i] & TileFlag::Ramp) return {226, 178, 120, 255};
+    // Higher levels are drawn lighter; a dark rim marks the top of a cliff.
+    f32 shade = 0.78f + 0.20f * static_cast<f32>(map.level[i]);
+    const bool open = map.terrain[i] != Terrain::Water && map.terrain[i] != Terrain::Mountain;
+    for (int k = 0; k < 4 && open; ++k) {
+        const i32 nx = x + (k == 0) - (k == 1), ny = y + (k == 2) - (k == 3);
+        if (!map.in_bounds(nx, ny)) continue;
+        const size_t j = static_cast<size_t>(map.index(nx, ny));
+        if (map.level[j] < map.level[i] && map.terrain[j] != Terrain::Mountain && !(map.flags[j] & TileFlag::Ramp)) {
+            shade *= 0.55f;
+            break;
+        }
+    }
     const auto lit = [shade](f32 r, f32 g, f32 b) {
         return Color{static_cast<u8>(clamp(r * shade, 0.0f, 255.0f)), static_cast<u8>(clamp(g * shade, 0.0f, 255.0f)),
                      static_cast<u8>(clamp(b * shade, 0.0f, 255.0f)), 255};

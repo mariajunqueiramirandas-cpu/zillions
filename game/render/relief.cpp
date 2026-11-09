@@ -20,8 +20,13 @@ constexpr i32 kDx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
 constexpr i32 kDy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
 constexpr f32 kDiag = 1.41421356f;
 
-// Height, in tiles, that one unit of map elevation rises in open country.
-constexpr f32 kPlainHeight = 16.0f;
+// Height, in tiles, that one unit of map elevation rises within a level: a
+// faint roll that keeps flat ground from looking dead.
+constexpr f32 kPlainHeight = 6.0f;
+// Height of one level above the next, in tiles.
+constexpr f32 kLevelHeight = 1.6f;
+// Half-width of a cliff face, as a fraction of the blend between two levels.
+constexpr f32 kCliffWidth = 0.20f;
 
 // Mountain erosion model (see erode_mountains).
 constexpr int kErosionPasses = 3;
@@ -263,43 +268,110 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
     const i32 w = map.width, h = map.height;
     const Grid g{w * kReliefScale, h * kReliefScale};
     const size_t n = static_cast<size_t>(g.w) * static_cast<size_t>(g.h);
+    const size_t tiles = static_cast<size_t>(w) * static_cast<size_t>(h);
+    const auto tile_at = [&](i32 x, i32 y) { return static_cast<size_t>(clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)); };
 
-    // Tile heights for open country. Mountains are held at the level of their
-    // foot here; their shape is added by erosion below.
-    const f32 foot = (map.mountain_level - map.sea_level) * kPlainHeight;
-    std::vector<f32> coarse(static_cast<size_t>(w * h));
-    for (i32 i = 0; i < w * h; ++i) {
-        const size_t k = static_cast<size_t>(i);
-        const f32 e = clamp(map.elevation[k], map.sea_level, map.mountain_level);
-        coarse[k] = map.terrain[k] == Terrain::Water ? 0.0f : (e - map.sea_level) * kPlainHeight;
+    // Per tile: gentle undulation within a level, and the level itself as a
+    // number the texels can interpolate. Ramp tiles sit part-way between the
+    // levels they join. Under mountains the level is relaxed into a smooth
+    // surface, so a range standing across a cliff line has no step inside it.
+    std::vector<f32> undulation(tiles), step(tiles);
+    std::vector<u8> smooth(tiles);  // 1 where the surface slopes instead of breaking into a cliff
+    for (i32 y = 0; y < h; ++y) {
+        for (i32 x = 0; x < w; ++x) {
+            const size_t k = tile_at(x, y);
+            const bool is_rock = map.terrain[k] == Terrain::Mountain, is_ramp = (map.flags[k] & TileFlag::Ramp) != 0;
+            const f32 e = clamp(map.elevation[k], map.sea_level, map.mountain_level);
+            undulation[k] = map.terrain[k] == Terrain::Water ? 0.0f : (e - map.sea_level) * kPlainHeight;
+            step[k] = static_cast<f32>(map.level[k]);
+            if (is_ramp) {
+                for (int d = 0; d < 4; ++d) {
+                    const size_t j = tile_at(x + kDx[d], y + kDy[d]);
+                    if (map.terrain[j] == Terrain::Mountain) continue;
+                    if (map.level[j] > map.level[k]) step[k] = static_cast<f32>(map.level[k]) + 0.3f;
+                    if (map.level[j] < map.level[k]) step[k] = static_cast<f32>(map.level[k]) - 0.3f;
+                }
+            }
+            smooth[k] = is_rock || is_ramp;
+        }
     }
-    const auto tile_height = [&](i32 x, i32 y) { return coarse[static_cast<size_t>(clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1))]; };
-
-    // Spline upsampling keeps slopes continuous across tile borders.
-    std::vector<f32> height(n);
+    for (int pass = 0; pass < 32; ++pass) {
+        for (i32 y = 0; y < h; ++y) {
+            for (i32 x = 0; x < w; ++x) {
+                const size_t k = tile_at(x, y);
+                if (map.terrain[k] != Terrain::Mountain) continue;
+                step[k] = 0.25f * (step[tile_at(x - 1, y)] + step[tile_at(x + 1, y)] + step[tile_at(x, y - 1)] + step[tile_at(x, y + 1)]);
+            }
+        }
+    }
+    const u32 seed = static_cast<u32>(mix64(map.seed ^ 0xC4A6ull));
+    std::vector<f32> height(n), terrace(n), gentle(n), cliff(n);
     std::vector<u8> rock(n);
     jobs.parallel_for(g.h, 16, [&](i32 y0, i32 y1) {
         for (i32 y = y0; y < y1; ++y) {
-            const f32 ty = (static_cast<f32>(y) + 0.5f) / kReliefScale - 0.5f;
+            const f32 ty = (static_cast<f32>(y) + 0.5f) / kReliefScale - 0.5f;  // in tiles, relative to tile centres
             const i32 iy = static_cast<i32>(std::floor(ty));
             const f32 fy = ty - static_cast<f32>(iy);
             for (i32 x = 0; x < g.w; ++x) {
                 const f32 tx = (static_cast<f32>(x) + 0.5f) / kReliefScale - 0.5f;
                 const i32 ix = static_cast<i32>(std::floor(tx));
                 const f32 fx = tx - static_cast<f32>(ix);
+                const size_t i = g.at(x, y);
+                rock[i] = map.terrain[tile_at(x / kReliefScale, y / kReliefScale)] == Terrain::Mountain;
+
+                // Undulation: spline upsampling keeps slopes continuous across tile borders.
                 f32 rows[4];
                 for (i32 r = 0; r < 4; ++r) {
-                    rows[r] = catmull_rom(tile_height(ix - 1, iy - 1 + r), tile_height(ix, iy - 1 + r), tile_height(ix + 1, iy - 1 + r), tile_height(ix + 2, iy - 1 + r), fx);
+                    rows[r] = catmull_rom(undulation[tile_at(ix - 1, iy - 1 + r)], undulation[tile_at(ix, iy - 1 + r)],
+                                          undulation[tile_at(ix + 1, iy - 1 + r)], undulation[tile_at(ix + 2, iy - 1 + r)], fx);
                 }
-                height[g.at(x, y)] = std::max(0.0f, catmull_rom(rows[0], rows[1], rows[2], rows[3], fy));
-                rock[g.at(x, y)] = map.terrain[static_cast<size_t>(map.index(x / kReliefScale, y / kReliefScale))] == Terrain::Mountain;
+                height[i] = std::max(0.0f, catmull_rom(rows[0], rows[1], rows[2], rows[3], fy));
+
+                // Level and "no cliff here" mask, interpolated between tile centres.
+                const size_t k00 = tile_at(ix, iy), k10 = tile_at(ix + 1, iy), k01 = tile_at(ix, iy + 1), k11 = tile_at(ix + 1, iy + 1);
+                const f32 w00 = (1.0f - fx) * (1.0f - fy), w10 = fx * (1.0f - fy), w01 = (1.0f - fx) * fy, w11 = fx * fy;
+                terrace[i] = w00 * step[k00] + w10 * step[k10] + w01 * step[k01] + w11 * step[k11];
+                gentle[i] = w00 * smooth[k00] + w10 * smooth[k10] + w01 * smooth[k01] + w11 * smooth[k11];
+            }
+        }
+    });
+
+    // Blurring the level field turns the staircase outline of each terrace
+    // into a smooth curve; the cliff is then drawn where that curve crosses the
+    // half-way mark between two levels.
+    {
+        std::vector<f32> tmp(n);
+        // Two wide passes approximate a Gaussian about a tile across, enough
+        // to iron out the one-tile ripple of a diagonal staircase.
+        box_blur(g, terrace, tmp, kReliefScale, jobs);
+        box_blur(g, tmp, terrace, kReliefScale, jobs);
+        box_blur(g, gentle, tmp, kReliefScale / 2, jobs);
+        gentle.swap(tmp);
+    }
+    jobs.parallel_for(g.h, 16, [&](i32 y0, i32 y1) {
+        for (i32 y = y0; y < y1; ++y) {
+            for (i32 x = 0; x < g.w; ++x) {
+                const size_t i = g.at(x, y);
+                const f32 px = (static_cast<f32>(x) + 0.5f) / kReliefScale, py = (static_cast<f32>(y) + 0.5f) / kReliefScale;
+                const f32 ease = smoothstep(0.2f, 0.7f, gentle[i]);
+                // A little noise makes the cliff line wander. It moves the line
+                // only where levels are changing; flat ground snaps back to whole levels.
+                const f32 value = terrace[i] + 0.11f * simplex2(px / 2.1f, py / 2.1f, seed + 21u) * (1.0f - ease);
+                const f32 whole = std::floor(value), part = value - whole;
+                const f32 snapped = whole + smoothstep(0.5f - kCliffWidth, 0.5f + kCliffWidth, part);
+                terrace[i] = lerp(snapped, terrace[i], ease);
+                cliff[i] = (1.0f - ease) * (1.0f - smoothstep(kCliffWidth * 0.75f, kCliffWidth * 1.5f, std::fabs(part - 0.5f)));
             }
         }
     });
 
     std::vector<f32> rise(n, 0.0f);
-    erode_mountains(g, rock, static_cast<u32>(mix64(map.seed ^ 0xC4A6ull)), jobs, rise);
-    for (size_t i = 0; i < n; ++i) height[i] += rise[i];
+    erode_mountains(g, rock, seed, jobs, rise);
+    f32 highest_rise = 1.0e-3f;
+    for (size_t i = 0; i < n; ++i) {
+        height[i] += terrace[i] * kLevelHeight + rise[i];
+        highest_rise = std::max(highest_rise, rise[i]);
+    }
     {
         // A light blur rounds off the stair-steps of eight-direction drainage.
         std::vector<f32> soft(n);
@@ -316,9 +388,9 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
     for (const f32 v : height) top = std::max(top, v);
 
     Relief relief;
-    relief.texture = Image(g.w, g.h);
+    relief.shape = Image(g.w, g.h);
+    relief.surface = Image(g.w, g.h);
     relief.height_range = top;
-    relief.mountain_foot = foot / top;
     const auto sample = [&](i32 x, i32 y) { return height[g.at(clamp(x, 0, g.w - 1), clamp(y, 0, g.h - 1))]; };
     jobs.parallel_for(g.h, 16, [&](i32 y0, i32 y1) {
         for (i32 y = y0; y < y1; ++y) {
@@ -335,7 +407,8 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
                 const size_t i = g.at(x, y);
                 const auto signed_byte = [](f32 v) { return static_cast<u8>(clamp(v * 0.5f + 0.5f, 0.0f, 1.0f) * 255.0f + 0.5f); };
                 const auto unit_byte = [](f32 v) { return static_cast<u8>(clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
-                relief.texture.at(x, y) = {signed_byte(nx * inv), signed_byte(ny * inv), unit_byte(height[i] / top), signed_byte((height[i] - blurred[i]) * 1.6f)};
+                relief.shape.at(x, y) = {signed_byte(nx * inv), signed_byte(ny * inv), unit_byte(height[i] / top), signed_byte((height[i] - blurred[i]) * 1.6f)};
+                relief.surface.at(x, y) = {unit_byte(rise[i] / highest_rise), unit_byte(cliff[i]), unit_byte(terrace[i] / static_cast<f32>(kHeightLevels - 1)), 255};
             }
         }
     });

@@ -1,6 +1,6 @@
 // Builds the fine-grained height field the terrain shader lights the map with.
-// Open country gets a smooth upsampling of tile elevation; mountains get an
-// eroded surface with branching ridges and valleys.
+// Open country is terraced into height levels with cliffs and ramps between
+// them; mountains get an eroded surface with branching ridges and valleys.
 #pragma once
 
 #include "core/base.h"
@@ -17,9 +17,12 @@ inline constexpr i32 kReliefScale = 4;
 struct Relief {
     // r, g: surface normal x, y (packed to 0..255). b: height. a: cavity, i.e.
     // how far the surface sits above (>0.5) or below (<0.5) its surroundings.
-    Image texture;
-    f32 height_range = 1.0f;   // height in tiles that b == 1 stands for
-    f32 mountain_foot = 0.0f;  // normalised height at which mountains begin
+    Image shape;
+    // r: altitude within a mountain range (0 at its foot, 1 at the highest
+    // summit). g: how much of a cliff face this point is. b: height level, as a
+    // fraction of the highest level, sloping across ramps.
+    Image surface;
+    f32 height_range = 1.0f;  // height in tiles that shape.b == 1 stands for
 };
 
 Relief build_relief(const TileMap& map, JobSystem& jobs);
