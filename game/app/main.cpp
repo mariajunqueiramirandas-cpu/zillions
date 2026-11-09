@@ -1,5 +1,6 @@
 // Zillions: map viewer. For now the game is the engine plus the map generator;
 // this executable lets you fly over generated maps and capture screenshots.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -7,6 +8,7 @@
 
 #include "core/clock.h"
 #include "core/jobs.h"
+#include "core/rng.h"
 #include "gfx/gl.h"
 #include "gfx/render_target.h"
 #include "platform/window.h"
@@ -29,6 +31,8 @@ struct Options {
     bool have_center = false;
     Vec2 center{0, 0};
     f32 time = 0.0f;
+    MapOverlay overlay = MapOverlay::None;
+    bool grid = false;
 };
 
 void usage() {
@@ -43,7 +47,10 @@ void usage() {
         "  --whole-map          frame the entire map (default: the start area)\n"
         "  --center X Y         centre the view on a tile\n"
         "  --zoom PIXELS        pixels per tile\n"
+        "  --overlay MODE       debug view: height or pass\n"
+        "  --grid               draw tile borders\n"
         "controls: WASD/arrows or right-drag to pan, wheel to zoom, R new map,\n"
+        "          V cycle overlay (height, passability),\n"
         "          G grid, F whole map, H start area, F2 screenshot, Esc quit");
 }
 
@@ -61,6 +68,16 @@ bool parse(int argc, char** argv, Options& o) {
         else if (is("--whole-map")) o.whole_map = true;
         else if (is("--zoom")) o.zoom = static_cast<f32>(std::atof(next()));
         else if (is("--time")) o.time = static_cast<f32>(std::atof(next()));
+        else if (is("--grid")) o.grid = true;
+        else if (is("--overlay")) {
+            const char* mode = next();
+            if (!std::strcmp(mode, "height")) o.overlay = MapOverlay::Height;
+            else if (!std::strcmp(mode, "pass")) o.overlay = MapOverlay::Passability;
+            else {
+                usage();
+                return false;
+            }
+        }
         else if (is("--center")) {
             o.center.x = static_cast<f32>(std::atof(next()));
             o.center.y = static_cast<f32>(std::atof(next()));
@@ -128,6 +145,61 @@ void bench_view(const char* name, MapRenderer& renderer, const Camera2D& camera)
     std::printf("  %-10s %6u sprites   submit %7.3f ms   frame %7.3f ms\n", name, renderer.sprites_drawn(), submit_ms / kFrames, total.millis() / kFrames);
 }
 
+// Stress test for the unit path that does not exist yet: `count` sprites that
+// all move every frame, written straight into GPU memory by every core. "fill"
+// is the engine's own cost; "frame" adds the draw and waits for the GPU.
+void bench_horde(u32 count, const MapRenderer& renderer, const TileMap& map, JobSystem& jobs, SpriteBatch& batch, const Camera2D& camera) {
+    RenderTarget target;
+    target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
+    target.bind();
+    glClearColor(0.1f, 0.12f, 0.1f, 1.0f);
+
+    const SpriteSet& set = renderer.art().bush;
+    const SpriteDef* defs = renderer.art().defs.data() + set.first;
+    const f32 size = static_cast<f32>(map.width);
+    const auto fill = [&](SpriteInstance* out, f32 time, JobSystem& pool) {
+        pool.parallel_for(static_cast<i32>(count), 4096, [&](i32 begin, i32 end) {
+            for (i32 i = begin; i < end; ++i) {
+                // A stand-in for simulation output: every sprite drifts on its own heading.
+                const u32 h = hash32(static_cast<u32>(i) * 2654435761u + 1u);
+                const f32 x0 = hash_to_unit(h) * size, y0 = hash_to_unit(hash32(h + 1)) * size;
+                const f32 vx = hash_to_unit(hash32(h + 2)) - 0.5f, vy = hash_to_unit(hash32(h + 3)) - 0.5f;
+                f32 x = x0 + vx * time * 3.0f, y = y0 + vy * time * 3.0f;
+                x -= size * std::floor(x / size);
+                y -= size * std::floor(y / size);
+                const SpriteDef& d = defs[h % static_cast<u32>(set.count)];
+                out[i] = {x - d.anchor_x * 0.6f, y - d.anchor_y * 0.6f, d.width * 0.6f, d.height * 0.6f, d.u0, d.v0, d.u1, d.v1, 0xFFFFFFFFu};
+            }
+        });
+    };
+
+    JobSystem single(1);
+    constexpr int kFrames = 40;
+    f64 fill_ms = 0.0, fill_single_ms = 0.0;
+    glFinish();
+    const Stopwatch total;
+    for (int frame = 0; frame < kFrames; ++frame) {
+        glClear(GL_COLOR_BUFFER_BIT);
+        SpriteInstance* out = batch.begin(count);
+        const Stopwatch timer;
+        fill(out, static_cast<f32>(frame) / 60.0f, jobs);
+        fill_ms += timer.millis();
+        batch.draw(count, camera, renderer.sprite_atlas());
+        glFinish();
+    }
+    const f64 frame_ms = total.millis() / kFrames;
+    // The same fill on one thread, for the scaling figure.
+    for (int frame = 0; frame < 8; ++frame) {
+        SpriteInstance* out = batch.begin(count);
+        const Stopwatch timer;
+        fill(out, static_cast<f32>(frame) / 60.0f, single);
+        fill_single_ms += timer.millis();
+        batch.draw(0, camera, renderer.sprite_atlas());
+    }
+    std::printf("  %7u moving sprites   fill %6.3f ms on %d threads (%6.3f ms on 1)   frame %8.3f ms\n", count, fill_ms / kFrames,
+                jobs.thread_count(), fill_single_ms / 8, frame_ms);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -166,6 +238,8 @@ int main(int argc, char** argv) {
 
     MapDrawOptions draw;
     draw.time = options.time;
+    draw.overlay = options.overlay;
+    draw.grid = options.grid;
 
     if (options.bench) {
         std::printf("renderer, %dx%d, 2 draw calls per frame\n", options.width, options.height);
@@ -176,6 +250,11 @@ int main(int argc, char** argv) {
         bench_view("zoomed out", renderer, view);
         frame_whole_map(view, map);
         bench_view("whole map", renderer, view);
+
+        std::printf("sprite batch, 1 draw call per frame\n");
+        SpriteBatch horde;
+        horde.init();
+        for (const u32 count : {10000u, 100000u, 250000u}) bench_horde(count, renderer, map, jobs, horde, view);
         return 0;
     }
 
@@ -205,6 +284,7 @@ int main(int argc, char** argv) {
             log_map(map);
         }
         if (in.pressed(Key::G)) draw.grid = !draw.grid;
+        if (in.pressed(Key::V)) draw.overlay = static_cast<MapOverlay>((static_cast<int>(draw.overlay) + 1) % static_cast<int>(MapOverlay::Count));
         if (in.pressed(Key::F)) frame_whole_map(camera, map);
         if (in.pressed(Key::H)) frame_start(camera, map);
 

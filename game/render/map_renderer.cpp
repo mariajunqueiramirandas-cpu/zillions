@@ -27,7 +27,7 @@ void main() {
 // pixel finds its four nearest tiles in a data texture and blends their
 // materials, so cost depends only on screen resolution.
 const char* kTerrainFragment = R"(#version 330 core
-uniform sampler2D uTiles;         // r: terrain id, g: resource id (point sampled)
+uniform sampler2D uTiles;         // r: terrain id, g: resource id, b: tile flags, a: height level (point sampled)
 uniform sampler2D uRelief;        // rg: surface normal, b: height, a: cavity (ridge > 0.5 > valley)
 uniform sampler2D uSurface;       // r: mountain altitude, g: cliff face, b: height level
 uniform sampler2D uDepth;         // r: distance from water to shore, g: moisture
@@ -36,6 +36,7 @@ uniform vec2 uMapSize;
 uniform vec4 uWorld;              // world = gl_FragCoord.xy * xy + zw
 uniform float uTime;
 uniform float uGrid;
+uniform int uOverlay;             // 0: none, 1: height levels, 2: passability
 uniform float uPixel;             // world units per screen pixel
 uniform float uHeightRange;       // tiles of height that relief.b == 1 stands for
 out vec4 oColor;
@@ -163,6 +164,38 @@ void main() {
     float line = smoothstep(0.5 - 1.5 * uPixel, 0.5, max(fromEdge.x, fromEdge.y));
     color *= 1.0 - 0.22 * line * uGrid;
 
+    // Debug overlays show the gameplay data exactly as the simulation sees it:
+    // per tile, with no blending.
+    if (uOverlay > 0) {
+        ivec2 tc = clamp(ivec2(floor(p)), ivec2(0), last);
+        vec4 tile = texelFetch(uTiles, tc, 0);
+        int kind = int(tile.r * 255.0 + 0.5), flags = int(tile.b * 255.0 + 0.5), level = int(tile.a * 255.0 + 0.5);
+        bool walkable = (flags & 1) != 0, buildable = (flags & 2) != 0, ramp = (flags & 8) != 0;
+        vec3 tint;
+        float strength;
+        if (uOverlay == 1) {
+            tint = ramp ? vec3(1.0) : (level == 0 ? vec3(0.20, 0.45, 0.92) : (level == 1 ? vec3(0.98, 0.80, 0.20) : vec3(0.92, 0.30, 0.22)));
+            strength = kind == 0 || kind == 6 ? 0.0 : (walkable ? 0.50 : 0.22);
+        } else {
+            tint = ramp ? vec3(0.20, 0.90, 0.95) : (buildable ? vec3(0.25, 0.85, 0.30) : (walkable ? vec3(0.95, 0.85, 0.25) : vec3(0.90, 0.20, 0.20)));
+            strength = 0.42;
+        }
+        color = mix(color, tint, strength);
+
+        // A dark line on every tile border a unit cannot cross because of a cliff.
+        if (walkable && !ramp) {
+            vec2 f = fract(p);
+            float width = max(0.07, 1.5 * uPixel);
+            ivec2 side = clamp(tc + ivec2(f.x < 0.5 ? -1 : 1, 0), ivec2(0), last);
+            ivec2 above = clamp(tc + ivec2(0, f.y < 0.5 ? -1 : 1), ivec2(0), last);
+            vec4 a = texelFetch(uTiles, side, 0), b = texelFetch(uTiles, above, 0);
+            int fa = int(a.b * 255.0 + 0.5), fb = int(b.b * 255.0 + 0.5);
+            bool cliffA = (fa & 1) != 0 && (fa & 8) == 0 && int(a.a * 255.0 + 0.5) != level && min(f.x, 1.0 - f.x) < width;
+            bool cliffB = (fb & 1) != 0 && (fb & 8) == 0 && int(b.a * 255.0 + 0.5) != level && min(f.y, 1.0 - f.y) < width;
+            if (cliffA || cliffB) color = vec3(0.10, 0.02, 0.02);
+        }
+    }
+
     // Fade to the backdrop just outside the map.
     vec2 outside = max(-p, p - uMapSize);
     float inside = 1.0 - smoothstep(0.0, 2.0 * uPixel, max(outside.x, outside.y));
@@ -200,6 +233,7 @@ void MapRenderer::init(JobSystem& jobs) {
     u_map_size_ = terrain_.uniform("uMapSize");
     u_time_ = terrain_.uniform("uTime");
     u_grid_ = terrain_.uniform("uGrid");
+    u_overlay_ = terrain_.uniform("uOverlay");
     u_pixel_ = terrain_.uniform("uPixel");
     u_height_range_ = terrain_.uniform("uHeightRange");
 
@@ -215,7 +249,7 @@ void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
     Image tiles(w, h), hydro(w, h);
     for (i32 i = 0; i < w * h; ++i) {
         const size_t k = static_cast<size_t>(i);
-        tiles.pixels[k] = {static_cast<u8>(map.terrain[k]), static_cast<u8>(map.resource[k]), 0, 255};
+        tiles.pixels[k] = {static_cast<u8>(map.terrain[k]), static_cast<u8>(map.resource[k]), map.flags[k], map.level[k]};
         hydro.pixels[k] = {map.shore_dist[k], static_cast<u8>(saturate(map.moisture[k]) * 255.0f + 0.5f), 0, 255};
     }
     tiles_.create(tiles, TextureFilter::Nearest, TextureWrap::Clamp);
@@ -336,6 +370,7 @@ void MapRenderer::draw(const Camera2D& camera, const MapDrawOptions& options) {
     glUniform2f(u_map_size_, static_cast<f32>(map_width_), static_cast<f32>(map_height_));
     glUniform1f(u_time_, options.time);
     glUniform1f(u_grid_, options.grid ? 1.0f : 0.0f);
+    glUniform1i(u_overlay_, static_cast<int>(options.overlay));
     glUniform1f(u_pixel_, inv_zoom);
     glUniform1f(u_height_range_, height_range_);
     tiles_.bind(0);

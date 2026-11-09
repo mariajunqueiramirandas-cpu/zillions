@@ -34,7 +34,7 @@ which need no windowing system or GPU.
 ```
 zillions [--seed N] [--size N] [--width W --height H] [--no-vsync]
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
-         [--bench]
+         [--overlay height|pass] [--grid] [--bench]
 ```
 
 | Input | Action |
@@ -44,10 +44,20 @@ zillions [--seed N] [--size N] [--width W --height H] [--no-vsync]
 | R or Space | generate the next seed |
 | F / H | frame the whole map / the start area |
 | G | tile grid |
+| V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
 
 `zl_mapgen` is the headless generator: `--out preview.png` writes a flat-colour
 preview, `--bench` times generation.
+
+`zillions --bench` times the renderer off-screen, then stress-tests the sprite
+batch with 10,000 to 250,000 sprites that all move every frame.
+
+The overlays draw gameplay data per tile, exactly as the simulation sees it.
+Height shows level 0 in blue, 1 in yellow, 2 in red, ramps in white and a black
+line on every border a cliff blocks:
+
+![Height overlay](docs/screenshots/overlay-height.jpg)
 
 ## Layout
 
@@ -97,8 +107,9 @@ simulation can run in tests, tools and (later) a server.
    and end in a lake or leave the map.
 5. **Mountains**: consolidated with a majority filter; specks are dropped.
 6. **Height levels**: smoothed elevation is cut into three flat levels at
-   percentiles, ledges too narrow to use are filtered out, and the start area
-   is kept on a single level.
+   percentiles. Ledges too narrow to use, including the thin skirts that
+   would otherwise ring every mountain, are lowered, and the start area is
+   kept on a single level.
 7. **Terrain**: beaches along lakes, forest in groves biased to wet ground,
    dry patches, scree at the foot of mountains.
 8. **Fords**: shallow crossings on narrow river reaches.

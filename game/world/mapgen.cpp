@@ -495,6 +495,23 @@ private:
         }
         m_.level.swap(filtered);
 
+        // High ground crowds around mountains, so each range tends to collect a
+        // thin skirt of ledge between its foot and the nearest cliff: a ring of
+        // cliff that encloses almost nothing. Where that strip is narrow it is
+        // lowered to the level below, working from the top level down.
+        constexpr f32 kMinLedge = 9.0f;
+        std::vector<f32> to_lower(static_cast<size_t>(n_)), to_rock(static_cast<size_t>(n_));
+        for (i32 i = 0; i < n_; ++i) to_rock[static_cast<size_t>(i)] = rock_[static_cast<size_t>(i)] ? 0.0f : kInf;
+        chamfer_distance(to_rock, w_, h_);
+        for (int l = kHeightLevels - 1; l >= 1; --l) {
+            for (i32 i = 0; i < n_; ++i) to_lower[static_cast<size_t>(i)] = level(i) < l ? 0.0f : kInf;
+            chamfer_distance(to_lower, w_, h_);
+            for (i32 i = 0; i < n_; ++i) {
+                const size_t k = static_cast<size_t>(i);
+                if (level(i) == l && to_lower[k] + to_rock[k] < kMinLedge) m_.level[k] = static_cast<u8>(l - 1);
+            }
+        }
+
         // Terraces too small to build on or defend are absorbed by their surroundings.
         const i32 min_size = std::max(60, n_ / 900);
         for (int pass = 0; pass < 2; ++pass) {

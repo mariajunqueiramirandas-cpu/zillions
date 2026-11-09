@@ -16,9 +16,18 @@ namespace zl {
 
 class JobSystem;
 
+// Debug views of the gameplay data, drawn per tile over the terrain.
+enum class MapOverlay : u8 {
+    None,
+    Height,       // height level of each tile, ramps and cliff edges
+    Passability,  // buildable, walkable only, ramp or blocked
+    Count
+};
+
 struct MapDrawOptions {
     f32 time = 0.0f;      // seconds; animates water
     bool grid = false;    // overlay tile boundaries
+    MapOverlay overlay = MapOverlay::None;
 };
 
 class MapRenderer {
@@ -32,6 +41,10 @@ public:
     void set_map(const TileMap& map, JobSystem& jobs);
     void draw(const Camera2D& camera, const MapDrawOptions& options);
 
+    // The sprite atlas and its catalogue, for anything else that draws sprites.
+    const Texture& sprite_atlas() const { return sprites_; }
+    const TerrainArt& art() const { return art_; }
+
     u32 decor_count() const { return static_cast<u32>(decor_.size()); }
     u32 sprites_drawn() const { return sprites_drawn_; }
 
@@ -40,7 +53,7 @@ private:
 
     TerrainArt art_;
     Shader terrain_;
-    i32 u_world_ = -1, u_map_size_ = -1, u_time_ = -1, u_grid_ = -1, u_pixel_ = -1, u_height_range_ = -1;
+    i32 u_world_ = -1, u_map_size_ = -1, u_time_ = -1, u_grid_ = -1, u_overlay_ = -1, u_pixel_ = -1, u_height_range_ = -1;
     f32 height_range_ = 1.0f;
     u32 vao_ = 0;
 
