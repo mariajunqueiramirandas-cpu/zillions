@@ -97,7 +97,8 @@ simulation can run in tests, tools and (later) a server.
   stateless. A seed produces the same map on any number of threads (tested).
 - **Fixed timestep** scaffolding is in place for the simulation.
 - **No art files yet.** Ground textures and sprites are drawn in code at
-  start-up, as placeholders that can be swapped for real art later.
+  start-up, as placeholders that can be swapped for real art later. The brief
+  for that art is in [docs/art-direction.md](docs/art-direction.md).
 
 ## Map generation
 
