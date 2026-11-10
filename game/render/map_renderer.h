@@ -30,6 +30,8 @@ struct MapDrawOptions {
     MapOverlay overlay = MapOverlay::None;
 };
 
+struct SeeThrough { Vec2 lo, hi; };  // bounds in the projected isometric plane
+
 class MapRenderer {
 public:
     MapRenderer() = default;
@@ -45,6 +47,10 @@ public:
     void reload_art(JobSystem& jobs, const char* asset_dir);
     void set_map(const TileMap& map, JobSystem& jobs);
     void draw(const IsometricCamera& camera, const MapDrawOptions& options);
+    void draw_ground(const IsometricCamera& camera, const MapDrawOptions& options);
+    void draw_scenery(const IsometricCamera& camera, f32 depth_begin, f32 depth_end, const SeeThrough* reveal = nullptr);
+    const ShadowView* shadow_view() const { return active_shadows_ ? &shadow_view_ : nullptr; }
+    f32 depth_scale() const { return 1.0f / (static_cast<f32>(map_width_ + map_height_) + height_range_ * tiles_per_unit_ + 32.0f); }
     f32 ground_height(Vec2 position) const;
     f32 surface_height(Vec2 position, f32 zoom) const;
     // Closest visible intersection, including elevated terrain. False when
@@ -70,6 +76,7 @@ private:
     ShadowView shadow_view_;
     u32 shadow_fbo_ = 0, shadow_texture_ = 0, caster_vao_ = 0, caster_buffer_ = 0;
     bool shadows_valid_ = false;
+    bool active_shadows_ = true;
     i32 shadow_rotation_ = -1;
     f32 shadow_step_ = 0.0f;
     i32 u_view_ = -1, u_rotation_ = -1, u_depth_scale_ = -1, u_step_ = -1, u_cells_ = -1, u_wall_ = -1;

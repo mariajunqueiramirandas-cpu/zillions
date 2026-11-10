@@ -6,16 +6,14 @@
 
 namespace zl {
 
-struct IsometricCamera {
+// Share camera state with CameraModeSwitch; rendering uses plane_camera().
+struct IsometricCamera : Camera2D {
     static constexpr f32 kX = 0.7071067812f;
     static constexpr f32 kY = 0.3535533906f;
     static constexpr f32 kZ = 0.8660254038f;
     static constexpr f32 kDepthXY = 0.6123724357f;
 
-    Vec2 center{0, 0};
     f32 center_height = 0.0f;
-    f32 zoom = 32.0f;
-    Vec2 viewport{1, 1};
     i32 rotation = 0;  // clockwise quarter turns, always normalised by turn()
 
     Vec2 rotate(Vec2 p) const {

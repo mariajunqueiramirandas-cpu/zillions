@@ -815,6 +815,12 @@ void MapRenderer::update_shadows(const IsometricCamera& camera) {
 }
 
 void MapRenderer::draw(const IsometricCamera& camera, const MapDrawOptions& options) {
+    draw_ground(camera, options);
+    draw_scenery(camera, -1.0e30f, 1.0e30f);
+}
+
+void MapRenderer::draw_ground(const IsometricCamera& camera, const MapDrawOptions& options) {
+    active_shadows_ = options.shadows;
     if (options.shadows) update_shadows(camera);
     glClearColor(0.030f, 0.036f, 0.046f, 1.0f);
     glDepthMask(GL_TRUE);
@@ -832,8 +838,8 @@ void MapRenderer::draw(const IsometricCamera& camera, const MapDrawOptions& opti
     const Vec2 rx = camera.rotate({1, 0}), ry = camera.rotate({0, 1});
     const f32 rotation[] = {rx.x, rx.y, ry.x, ry.y};
     glUniformMatrix2fv(u_rotation_, 1, GL_FALSE, rotation);
-    const f32 depth_scale = 1.0f / (static_cast<f32>(map_width_ + map_height_) + height_range_ * tiles_per_unit_ + 32.0f);
-    glUniform1f(u_depth_scale_, depth_scale);
+    const f32 scale_depth = depth_scale();
+    glUniform1f(u_depth_scale_, scale_depth);
     glUniform2f(u_map_size_, static_cast<f32>(map_width_), static_cast<f32>(map_height_));
     glUniform1f(u_time_, options.time);
     glUniform1f(u_grid_, options.grid ? 1.0f : 0.0f);
@@ -879,11 +885,21 @@ void MapRenderer::draw(const IsometricCamera& camera, const MapDrawOptions& opti
     glDrawArraysInstanced(GL_TRIANGLES, 0, edge_segments * 6, 1);
 
     sprites_drawn_ = 0;
+}
+
+void MapRenderer::draw_scenery(const IsometricCamera& camera, f32 depth_begin, f32 depth_end, const SeeThrough* reveal) {
+    const Camera2D plane = camera.plane_camera();
+    const f32 scale_depth = depth_scale();
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     if (camera.zoom >= kDecorMinZoom && !decor_.empty()) {
         SpriteInstance* out = batch_.begin(static_cast<u32>(decor_.size()));
         const auto& order = decor_order_[(camera.rotation % 4 + 4) % 4];
+        u32 count = 0;
         for (const u32 k : order) {
             const Decor& decor = decor_[k];
+            const Vec2 rotated = camera.rotate(decor.ground);
+            if (rotated.x + rotated.y < depth_begin || rotated.x + rotated.y >= depth_end) continue;
             Vec2 projected = camera.project(decor.ground, decor.height);
             SpriteInstance sprite = decor.sprite;
             sprite.x += projected.x;
@@ -893,15 +909,23 @@ void MapRenderer::draw(const IsometricCamera& camera, const MapDrawOptions& opti
             const f32 height = surface_height(decor.ground, camera.zoom);
             projected = camera.project(decor.ground, height);
             sprite.y = decor.sprite.y + projected.y;
-            sprite.depth = -camera.depth(decor.ground, height) * depth_scale - 0.025f * depth_scale;
-            sprite.depth_span = sprite.h / (2.0f * IsometricCamera::kZ) * depth_scale;
-            sprite.ground_span = -sprite.h * (IsometricCamera::kDepthXY / IsometricCamera::kY) * depth_scale;
-            out[sprites_drawn_++] = sprite;
+            sprite.depth = -camera.depth(decor.ground, height) * scale_depth - 0.025f * scale_depth;
+            sprite.depth_span = sprite.h / (2.0f * IsometricCamera::kZ) * scale_depth;
+            sprite.ground_span = -sprite.h * (IsometricCamera::kDepthXY / IsometricCamera::kY) * scale_depth;
+            if (reveal && sprite.h > 1.1f) {
+                const f32 overlap_x = std::min(sprite.x + sprite.w, reveal->hi.x) - std::max(sprite.x, reveal->lo.x);
+                const f32 overlap_y = std::min(sprite.y + sprite.h, reveal->hi.y) - std::max(sprite.y, reveal->lo.y);
+                const f32 cover = saturate(std::min(overlap_x, overlap_y) / 0.35f);
+                const u32 alpha = static_cast<u32>(lerp(255.0f, 255.0f * 0.24f, cover) + 0.5f);
+                sprite.color = (sprite.color & 0x00FFFFFFu) | (alpha << 24);
+            }
+            out[count++] = sprite;
         }
         // Sort back to front, retain transparent edges, and compare every pixel
         // with terrain. Transparent canvas pixels never occlude another object.
         glDepthMask(GL_FALSE);
-        batch_.draw(sprites_drawn_, plane, sprites_, options.shadows ? &shadow_view_ : nullptr, &camera, depth_scale);
+        batch_.draw(count, plane, sprites_, shadow_view(), &camera, scale_depth);
+        sprites_drawn_ += count;
         glDepthMask(GL_TRUE);
     }
     glDisable(GL_DEPTH_TEST);

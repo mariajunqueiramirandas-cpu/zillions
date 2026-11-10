@@ -121,6 +121,11 @@ SpriteInstance* SpriteBatch::begin(u32 capacity) {
 
 void SpriteBatch::draw(u32 count, const Camera2D& camera, const Texture& atlas,
                        const ShadowView* shadows, const IsometricCamera* world_camera, f32 depth_scale) {
+    draw(count, camera, atlas.id(), shadows, world_camera, depth_scale);
+}
+
+void SpriteBatch::draw(u32 count, const Camera2D& camera, u32 atlas_texture,
+                       const ShadowView* shadows, const IsometricCamera* world_camera, f32 depth_scale) {
     ZL_ASSERT(mapped_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     glUnmapBuffer(GL_ARRAY_BUFFER);
@@ -137,7 +142,8 @@ void SpriteBatch::draw(u32 count, const Camera2D& camera, const Texture& atlas,
         glUniformMatrix2fv(shader_.uniform("uInverseRotation"), 1, GL_FALSE, inverse);
         glUniform1f(shader_.uniform("uWorldDepthScale"), depth_scale);
     }
-    atlas.bind(0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, atlas_texture);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

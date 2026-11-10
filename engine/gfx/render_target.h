@@ -22,6 +22,7 @@ public:
 
     i32 width() const { return width_; }
     i32 height() const { return height_; }
+    u32 color_texture() const { return color_; } // RGBA8, linearly filtered
 
 private:
     u32 fbo_ = 0;

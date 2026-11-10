@@ -9,11 +9,11 @@ pour in from the map edges. The terrain is the defence: cliffs, rivers and
 mountains funnel the horde through ramps, fords and passes, and the game is
 about choosing which chokepoints to hold. See [the design notes](docs/design.md).
 
-So far only the engine and the map generator exist; the colony, the economy and
-the horde are still to build.
+The engine, map generator and a playable human character are built. The colony,
+economy and horde are still to build.
 
 The world uses a 2:1 isometric view with displaced terrain, raised plateaus,
-sloping ramps, and depth-tested scenery. **Q / E** turn the view by 90° around
+sloping ramps, depth-tested scenery, and soft cast shadows from a world-space sun. **Q / E** turn the view by 90° around
 the terrain at the centre of the screen. See the [isometric viewer notes](docs/isometric.md).
 
 ![An isometric generated map](docs/screenshots/isometric-world.png)
@@ -31,6 +31,27 @@ Files live in `assets/ground` and `assets/sprites`, and the
 tiled ground proofs. The screenshots on this page are taken with that art.
 
 ![Generated ground textures](docs/art/ground-swatches.png)
+
+## The player's character
+
+Walk a human character around the map with WASD or the arrows; Shift sprints
+and Ctrl strolls. Space switches to management mode: the camera pulls back into
+a city-builder view that pans when the cursor nears the window borders (or with
+WASD / right-drag), while the character patrols and explores the surrounding
+area autonomously. Pressing Space again swoops the camera back to the character.
+Trees in front of the character fade, cliffs and deep water block movement, and
+fords slow the character and cover its feet with water and ripples.
+
+The figure is built and animated entirely in code, then painted into a small
+transparent texture every frame and drawn as a sprite. Soft filtering, flatter
+shading and quieter detail match the terrain. A jointed skeleton drives the
+clothes, face, hair, hood and belt gear. C chooses another seeded look, X raises
+the hood, and 1 restores the hero. F6 compares the painted sprite with the
+smooth procedural drawing; animation stays live in both styles.
+The [character notes](docs/character.md) explain the rig, gait and shader and
+record the visual and performance checks.
+
+![Recorded player demo: idle, walk, turn, jog, sprint and stop](docs/character/player-demo.gif)
 
 ## Building
 
@@ -56,20 +77,29 @@ which need no windowing system or GPU.
 zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no-vsync]
          [--assets DIR]
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
-         [--rotation 0|90|180|270] [--overlay height|pass] [--grid] [--bench]
+         [--rotation 0|90|180|270] [--no-shadows]
+         [--no-character] [--player X Y] [--heading DEG] [--speed M --phase P]
+         [--look N] [--hood] [--time SECONDS] [--character-sheet FILE]
+         [--character-style painted|smooth]
+         [--record-demo DIR --demo-seconds N --demo-fps N]
+         [--overlay height|pass] [--grid] [--bench]
 ```
 
 | Input | Action |
 |---|---|
-| WASD / arrows, right-drag | pan (Shift: faster) |
-| mouse wheel | zoom about the cursor |
 | Q / E | rotate the world 90° counterclockwise / clockwise |
-| R or Space | generate the next seed |
-| F / H | frame the whole map / the start area |
+| WASD / arrows | move the character (Shift: sprint, Ctrl: stroll); pan in management mode |
+| Space | switch between character-follow mode and management mode (autonomous character + city-builder camera) |
+| window borders / right- or middle-drag | pan in management mode |
+| mouse wheel | zoom about the character while following, or the cursor in management mode |
+| C / X / 1 | new seeded look / toggle hood / restore the hero |
+| R | generate the next seed |
+| F / H | frame the whole map (in management mode) / centre on the character (start area with `--no-character`) |
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
 | F5 | reload ground textures and sprites without changing the map or camera |
+| F6 | switch the character between painted sprite and smooth rendering |
 
 The painted art is read from `--assets DIR`, or by default from `./assets`, or
 failing that from the `assets` folder of the source tree the binary was built
@@ -83,14 +113,57 @@ one group is incomplete; the log reports that group's fallback.
 `zl_mapgen` is the headless generator: `--out preview.png` writes a flat-colour
 preview, `--bench` times generation.
 
-`zillions --bench` times the renderer off-screen, then stress-tests the sprite
-batch with 10,000 to 250,000 sprites that all move every frame.
+`--no-character` opens the map viewer with a free camera. `--player X Y`
+places the character on nearby walkable ground. Screenshot poses use heading
+in degrees (0 east, 90 south), speed in metres per second and stride phase in
+0..1; water depth is taken from the tile. `--look N` selects a repeatable person
+(0 restores the hero), and `--hood` raises the hood. `--character-sheet FILE`
+writes 64 poses and looks; `--zoom 256` makes a close-up review sheet.
+`--character-style painted` is the default; `smooth` draws the underlying
+procedural shapes directly at the screen resolution.
+
+`zillions --bench` times the map renderer off-screen, measures the procedural
+figure in both styles at 6, 64 and 256 pixels per tile (including pose,
+upload, painting and composition),
+then stress-tests the sprite batch with 10,000 to 250,000 moving sprites.
 
 The overlays draw gameplay data per tile, exactly as the simulation sees it.
 Height shows level 0 in blue, 1 in yellow, 2 in red, ramps in white and a black
 line on every border a cliff blocks:
 
 ![Height overlay](docs/screenshots/overlay-height.jpg)
+
+## Recording GIF demos
+
+The debug recorder generates a repeatable demo through the actual player
+controller and renderer: idle, profile walk, turn towards the camera, jog,
+sprint away, then stop. The default is an eight-second looping GIF, with
+captions showing the stage, time, gait speed and stride phase.
+
+```sh
+python3 -m pip install -r tools/requirements-debug.txt
+python3 tools/record_demo.py out/player-demo.gif
+```
+
+It writes a JSON state log beside the GIF. `--style smooth`, `--look N`,
+`--hood`, `--zoom`, `--width`, `--height`, `--fps`, `--seconds` and `--colors`
+make targeted reviews easy. `--no-captions` writes the scene alone;
+`--rig-overlay` shows the actual arm/leg joints in cyan and orange;
+`--keep-frames out/demo-frames` retains the source PNGs in a new or empty
+directory. Pass `--binary PATH` for another build. Run `--help` for limits.
+The state log includes the projected joints as well as movement and pose blends.
+
+The simulation always runs at 60 Hz and capture time is independent of render
+speed. A shared GIF palette keeps colours stable; delays preserve the clip's
+duration at frame rates such as 24 fps. On Linux with no `DISPLAY`, the tool
+starts `xvfb-run` automatically when Xvfb is installed.
+
+For PNGs without GIF encoding, use the game directly:
+
+```sh
+./build/game/zillions --seed 7 --size 256 --resolution 1 --width 512 --height 384 \
+  --zoom 128 --record-demo out/demo-frames --demo-seconds 8 --demo-fps 20
+```
 
 ## Layout
 
@@ -100,27 +173,37 @@ engine/math      vectors, simplex / fBm / ridged noise
 engine/platform  window, OpenGL context, input (GLFW)
 engine/gfx       shaders, textures, colour/depth targets, isometric and 2D cameras, sprite batch
 game/world       tile map, map generator, CPU preview        (headless)
-game/render      terrain shader, relief/erosion, art loading and placeholders
+game/actor       human rig, gait, looks and player controller (headless)
+game/render      terrain and figure shaders, relief, art loading and placeholders
 game/app         the viewer executable
-tools/           zl_mapgen
-tests/           headless test suite
+tools/           zl_mapgen, artwork export, GIF demo recorder
+tests/           headless, GPU and GIF encoder checks
 assets/          painted ground textures and sprites, and their source sheets
 ```
 
-`zl_core` and `zl_world` have no dependency on a window or GPU, so the
+`zl_core`, `zl_world` and `zl_actor` have no dependency on a window or GPU, so the
 simulation can run in tests, tools and (later) a server.
 
 ## Engine notes
 
-- **Up to three draw calls per frame.** Visible terrain chunks are one instanced
-  height-displaced mesh with distance-dependent tessellation; a second draw
-  closes the map edges with rock faces. Materials blend in world coordinates.
-  Scenery uses one instanced draw with 44 bytes per sprite, including upright
-  and contact-shadow depth. Quad corners are derived from `gl_VertexID`.
+- **Instanced terrain and scenery.** Visible terrain chunks use a height-displaced
+  mesh with distance-dependent tessellation; a second draw closes the map edges
+  with rock faces. Scenery uses one instanced draw with 44 bytes per sprite,
+  including upright and contact-shadow depth. Quad corners come from `gl_VertexID`.
+  With a character, scenery is split before and after its rotated ground depth.
+  Painted characters render into a live 64-pixel-per-tile GPU atlas and composite
+  between those slices; smooth mode uses a direct figure pass instead.
 - **Height and occlusion.** A full-precision height texture drives geometry,
-  scenery anchors, and terrain picking. The live window and screenshot targets
-  both have depth buffers. Four cached scenery orders handle camera rotation,
-  and terrain hides objects on the far sides of cliffs and mountains.
+  scenery anchors, and terrain picking. Live windows and screenshot targets both
+  have depth buffers. Four scenery orders handle camera rotation, and terrain
+  hides objects on the far sides of cliffs and mountains. Character geometry,
+  shadows, and movement use the same isometric camera.
+- **Directional shadows.** A cached 2048² floating-point sun depth map includes
+  terrain and alpha-cutout trees, bushes, boulders and deposits, including offscreen
+  casters. Terrain, water and characters receive soft filtered shadows while
+  retaining cool ambient light. Shadow geometry refreshes after camera or art
+  changes. A stationary map-only view uses up to three visible draws; refreshing
+  shadows adds two depth draws. `--no-shadows` makes reproducible comparisons.
 - **Job system.** A persistent thread pool with a blocking `parallel_for`;
   chunks are claimed with a single atomic add.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is

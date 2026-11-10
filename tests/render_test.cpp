@@ -4,10 +4,12 @@
 #include <cstdio>
 
 #include "core/jobs.h"
+#include "actor/human.h"
 #include "gfx/gl.h"
 #include "gfx/render_target.h"
 #include "platform/window.h"
 #include "render/map_renderer.h"
+#include "render/figure_renderer.h"
 
 using namespace zl;
 
@@ -277,6 +279,54 @@ void check_world(MapRenderer& renderer, JobSystem& jobs) {
     CHECK(same_image(reloaded, target.read_pixels()));
     CHECK(glGetError() == GL_NO_ERROR);
 }
+
+void check_isometric_figures(MapRenderer& renderer, JobSystem& jobs) {
+    TileMap map = fixture(1);
+    std::fill(map.level.begin(), map.level.end(), 0);
+    std::fill(map.terrain.begin(), map.terrain.end(), Terrain::Dirt);
+    renderer.set_map(map, jobs);
+    Figure figure;
+    build_human(hero_look(), HumanMotion{}, figure);
+    FigureRenderer figures;
+    figures.init();
+    RenderTarget target;
+    target.create(640, 480);
+    IsometricCamera camera;
+    camera.viewport = {640, 480};
+    camera.center = {23.5f, 31.5f};
+    camera.zoom = 96;
+    camera.center_height = renderer.surface_height(camera.center, camera.zoom) + 0.5f;
+    for (const FigureStyle style : {FigureStyle::Painted, FigureStyle::Smooth}) {
+        figures.set_style(style);
+        for (i32 rotation = 0; rotation < 4; ++rotation) {
+            camera.rotation = rotation;
+            target.bind();
+            renderer.draw_ground(camera, MapDrawOptions{});
+            const Image ground = target.read_pixels();
+            const auto draw = [&](f32 height) {
+                target.bind();
+                renderer.draw_ground(camera, MapDrawOptions{});
+                glDepthMask(GL_FALSE);
+                const FigureDraw item{&figure, camera.center, 0, 0, height};
+                figures.draw(&item, 1, camera.plane_camera(), &camera, renderer.shadow_view(), renderer.depth_scale());
+                glDepthMask(GL_TRUE);
+                return target.read_pixels();
+            };
+            const f32 height = renderer.surface_height(camera.center, camera.zoom);
+            const Image visible = draw(height);
+            i32 changed = 0;
+            for (size_t i = 0; i < ground.pixels.size(); ++i) {
+                if (std::abs(static_cast<i32>(ground.pixels[i].r) - visible.pixels[i].r) > 4) ++changed;
+            }
+            CHECK(changed > 200);
+            // Both live painted atlases and smooth figures compare their
+            // actual world depth with terrain instead of drawing over it.
+            CHECK(same_image(ground, draw(height - 5.0f)));
+        }
+    }
+    glDisable(GL_DEPTH_TEST);
+    CHECK(glGetError() == GL_NO_ERROR);
+}
 }  // namespace
 
 int main() {
@@ -291,6 +341,7 @@ int main() {
     renderer.init(jobs, ZL_ASSET_DIR);
     check_shadows(renderer, jobs);
     check_world(renderer, jobs);
+    check_isometric_figures(renderer, jobs);
     renderer.reload_art(jobs, nullptr);
     check_shadows(renderer, jobs);
     check_world(renderer, jobs);

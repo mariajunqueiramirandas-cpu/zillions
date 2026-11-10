@@ -1,18 +1,26 @@
-// Zillions: map viewer. For now the game is the engine plus the map generator;
-// this executable lets you fly over generated maps and capture screenshots.
+// Zillions. For now the game is the engine, the map generator and one
+// character: this executable lets you walk the player's character about a
+// generated map, fly the camera over it and capture screenshots.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <initializer_list>
 #include <string>
+#include <vector>
 
+#include "actor/human.h"
+#include "actor/player.h"
 #include "core/clock.h"
 #include "core/jobs.h"
 #include "core/rng.h"
 #include "gfx/gl.h"
 #include "gfx/render_target.h"
 #include "platform/window.h"
+#include "render/figure_renderer.h"
 #include "render/map_renderer.h"
 #include "world/mapgen.h"
 
@@ -28,16 +36,35 @@ struct Options {
     const char* assets = nullptr;      // directory holding the painted art; null = look for it
     const char* screenshot = nullptr;  // render one frame to this PNG and exit
     bool bench = false;                // time the renderer off-screen and exit
+    const char* record_demo = nullptr; // write deterministic demo PNGs + a state manifest
+    f64 demo_seconds = 8.0;
+    i32 demo_fps = 20;
     f32 zoom = 0.0f;                   // pixels per tile; 0 = default for the view
     bool whole_map = false;
     bool have_center = false;
     Vec2 center{0, 0};
-    i32 rotation = 0;                  // clockwise quarter turns
     f32 time = 0.0f;
     MapOverlay overlay = MapOverlay::None;
     bool grid = false;
     bool shadows = true;
+    i32 rotation = 0;
+
+    bool character = true;                  // put the player's character on the map
+    FigureStyle character_style = FigureStyle::Painted;
+    const char* character_sheet = nullptr;  // render the character's poses to this PNG and exit
+    bool have_player = false;
+    Vec2 player{0, 0};                      // where the character stands, in tiles
+    HumanMotion pose;                       // its pose in a screenshot
+    u64 look_seed = 0;                      // 0: the hero; otherwise a random person
+    bool hood_up = false;
 };
+
+// Pixels per tile the camera starts at when it follows the character, the
+// tactical city-builder overview in management mode, and the closest it will go.
+constexpr f32 kFollowZoom = 64.0f;
+constexpr f32 kManagementZoom = 34.0f;
+constexpr f32 kMaxZoom = 256.0f;
+constexpr f32 kEdgePanMargin = 36.0f;
 
 void usage() {
     std::puts(
@@ -50,16 +77,31 @@ void usage() {
         "  --assets DIR         painted art directory (default: ./assets, then source tree)\n"
         "  --screenshot FILE    render one frame to a PNG and exit\n"
         "  --bench              time the renderer off-screen and exit\n"
+        "  --record-demo DIR    record the player demo as PNGs + frames.json and exit\n"
+        "  --demo-seconds N     demo length, 0.1..30 seconds (default 8)\n"
+        "  --demo-fps N         demo frame rate, 1..60 (default 20)\n"
         "  --whole-map          frame the entire map (default: the start area)\n"
         "  --center X Y         centre the view on a tile\n"
         "  --zoom PIXELS        pixels per tile\n"
         "  --rotation DEGREES   camera angle: 0, 90, 180 or 270\n"
+        "  --no-shadows         disable cast shadows for comparisons\n"
+        "  --time SECONDS       screenshot animation time\n"
         "  --overlay MODE       debug view: height or pass\n"
         "  --grid               draw tile borders\n"
-        "  --no-shadows         disable cast shadows for comparisons\n"
-        "controls: WASD/arrows or right-drag to pan, wheel to zoom, R new map,\n"
-        "          Q/E rotate 90 degrees, V cycle overlay (height, passability),\n"
-        "          G grid, F whole map, H start area, F2 screenshot, F5 reload art, Esc quit");
+        "  --no-character       the map alone, as a free-flying viewer\n"
+        "  --character-style S  painted (default) or smooth\n"
+        "  --character-sheet F  render the character's poses to a PNG and exit\n"
+        "  --player X Y         where the character stands (default: the start)\n"
+        "  --heading DEG        screenshots: the way it faces (0 east, 90 towards the viewer)\n"
+        "  --speed M --phase P  screenshots: its speed in m/s and place in the stride, 0..1\n"
+        "  --look N             a different person for every N (default: the hero)\n"
+        "  --hood               hood up\n"
+        "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
+        "          Space management mode (border/WASD/right-drag pan, autonomous character),\n"
+        "          Q/E rotate 90 degrees, C new look, X hood, 1 the hero's look,\n"
+        "          R new map, V cycle overlay (height, passability), G grid,\n"
+        "          F whole map, H centre on character, F2 screenshot, F5 reload art,\n"
+        "          F6 painted/smooth character, Esc quit");
 }
 
 bool parse(int argc, char** argv, Options& o) {
@@ -81,8 +123,15 @@ bool parse(int argc, char** argv, Options& o) {
         }
         else if (is("--screenshot")) o.screenshot = next();
         else if (is("--bench")) o.bench = true;
+        else if (is("--record-demo")) {
+            if (i + 1 >= argc || argv[i + 1][0] == '\0' || std::strncmp(argv[i + 1], "--", 2) == 0) { usage(); return false; }
+            o.record_demo = argv[++i];
+        }
+        else if (is("--demo-seconds")) o.demo_seconds = std::atof(next());
+        else if (is("--demo-fps")) o.demo_fps = std::atoi(next());
         else if (is("--whole-map")) o.whole_map = true;
         else if (is("--zoom")) o.zoom = static_cast<f32>(std::atof(next()));
+        else if (is("--no-shadows")) o.shadows = false;
         else if (is("--rotation")) {
             const i32 degrees = std::atoi(next());
             if (degrees % 90 != 0) { usage(); return false; }
@@ -90,7 +139,6 @@ bool parse(int argc, char** argv, Options& o) {
         }
         else if (is("--time")) o.time = static_cast<f32>(std::atof(next()));
         else if (is("--grid")) o.grid = true;
-        else if (is("--no-shadows")) o.shadows = false;
         else if (is("--overlay")) {
             const char* mode = next();
             if (!std::strcmp(mode, "height")) o.overlay = MapOverlay::Height;
@@ -100,6 +148,24 @@ bool parse(int argc, char** argv, Options& o) {
                 return false;
             }
         }
+        else if (is("--no-character")) o.character = false;
+        else if (is("--character-style")) {
+            const char* style = next();
+            if (!std::strcmp(style, "painted")) o.character_style = FigureStyle::Painted;
+            else if (!std::strcmp(style, "smooth")) o.character_style = FigureStyle::Smooth;
+            else { usage(); return false; }
+        }
+        else if (is("--character-sheet")) o.character_sheet = next();
+        else if (is("--player")) {
+            o.player.x = static_cast<f32>(std::atof(next()));
+            o.player.y = static_cast<f32>(std::atof(next()));
+            o.have_player = true;
+        }
+        else if (is("--heading")) o.pose.heading = static_cast<f32>(std::atof(next())) * kPi / 180.0f;
+        else if (is("--speed")) o.pose.speed = static_cast<f32>(std::atof(next()));
+        else if (is("--phase")) o.pose.phase = static_cast<f32>(std::atof(next()));
+        else if (is("--look")) o.look_seed = std::strtoull(next(), nullptr, 10);
+        else if (is("--hood")) o.hood_up = true;
         else if (is("--center")) {
             o.center.x = static_cast<f32>(std::atof(next()));
             o.center.y = static_cast<f32>(std::atof(next()));
@@ -111,6 +177,12 @@ bool parse(int argc, char** argv, Options& o) {
     }
     const i32 res = o.map.resolution;
     if ((res != 1 && res != 2 && res != 4) || o.map.size < 64 * res || o.map.size > 4096 || o.width <= 0 || o.height <= 0) {
+        usage();
+        return false;
+    }
+    if (o.record_demo && (!o.character || o.screenshot || o.character_sheet || o.bench ||
+        !std::isfinite(o.demo_seconds) || o.demo_seconds < 0.1 || o.demo_seconds > 30.0 ||
+        o.demo_fps < 1 || o.demo_fps > 60 || o.width > 2048 || o.height > 2048)) {
         usage();
         return false;
     }
@@ -135,10 +207,12 @@ f32 fit_zoom(const TileMap& map, Vec2 viewport) {
     return std::min(viewport.x / (diagonal * IsometricCamera::kX), viewport.y / (diagonal * IsometricCamera::kY));
 }
 
+void frame_whole_map(IsometricCamera& camera, const TileMap&, const MapRenderer& renderer) { renderer.frame_map(camera); }
+
 void frame_start(IsometricCamera& camera, const TileMap& map, const MapRenderer& renderer) {
     camera.center = {static_cast<f32>(map.start.x) + 0.5f, static_cast<f32>(map.start.y) + 0.5f};
-    camera.center_height = renderer.ground_height(camera.center);
     camera.zoom = static_cast<f32>(kArtTilePixels);
+    camera.center_height = renderer.surface_height(camera.center, camera.zoom);
 }
 
 void log_map(const TileMap& map) {
@@ -148,14 +222,231 @@ void log_map(const TileMap& map) {
            s.walkable_tiles ? 100.0 * s.reachable_tiles / s.walkable_tiles : 0.0);
 }
 
-bool save_screenshot(MapRenderer& renderer, const IsometricCamera& camera, const MapDrawOptions& draw, const char* path) {
+HumanLook make_look(u64 seed, bool hood_up) {
+    HumanLook look = seed == 0 ? hero_look() : random_look(seed);
+    if (hood_up) look.hood_up = true;
+    return look;
+}
+
+// Interleave the character with scenery at its rotated ground depth. Terrain
+// depth handles cliffs; foreground scenery fades around the projected body.
+struct Scene {
+    MapRenderer& map;
+    FigureRenderer& figures;
+
+    void draw(const IsometricCamera& camera, const MapDrawOptions& options, const Figure* figure, Vec2 position, f32 extra_marker = 0.0f) {
+        if (!figure || figure->parts.empty()) { map.draw(camera, options); return; }
+        const f32 height = map.surface_height(position, camera.zoom);
+        const Vec2 standing = camera.project(position, height);
+        Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
+        for (const FigurePart& part : figure->parts) {
+            for (const Vec3 p : {part.a, part.b}) {
+                const Vec2 q = standing + camera.project({p.x, p.y}, p.z - figure->waterline);
+                const f32 radius = std::max(part.ra, part.rb);
+                lo.x = std::min(lo.x, q.x - radius); lo.y = std::min(lo.y, q.y - radius);
+                hi.x = std::max(hi.x, q.x + radius); hi.y = std::max(hi.y, q.y + radius);
+            }
+        }
+        const SeeThrough reveal{lo, hi};
+        const f32 marker = saturate(std::max(1.0f - smoothstep(9.0f, 16.0f, camera.zoom), extra_marker));
+        const FigureDraw item{figure, position, options.time, marker, height};
+        const Vec2 rotated = camera.rotate(position);
+        const f32 depth = rotated.x + rotated.y;
+        map.draw_ground(camera, options);
+        map.draw_scenery(camera, -1.0e30f, depth);
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        figures.draw(&item, 1, camera.plane_camera(), &camera, map.shadow_view(), map.depth_scale());
+        glDepthMask(GL_TRUE);
+        map.draw_scenery(camera, depth, 1.0e30f, &reveal);
+    }
+};
+
+bool save_screenshot(Scene& scene, const IsometricCamera& camera, const MapDrawOptions& draw, const Figure* figure, Vec2 position, const char* path) {
     RenderTarget target;
     target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
     target.bind();
-    renderer.draw(camera, draw);
+    scene.draw(camera, draw, figure, position);
     const Image image = target.read_pixels();
     const bool ok = write_png(path, image);
     ZL_LOG("%s %s (%dx%d)", ok ? "wrote" : "could not write", path, image.width, image.height);
+    return ok;
+}
+
+struct DemoStage {
+    f32 end;
+    const char* label;
+    PlayerInput input;
+};
+
+const DemoStage& demo_stage(f32 progress) {
+    static constexpr DemoStage stages[] = {
+        {0.08f, "Idle", {}},
+        {0.34f, "Walk - profile", {{1, 0}, false, true}},
+        {0.56f, "Walk - turn towards camera", {{0, 1}, false, true}},
+        {0.76f, "Jog - turn left", {{-1, 0}, false, false}},
+        {0.90f, "Sprint - turn away", {{0, -1}, true, false}},
+        {1.01f, "Stop and settle", {}},
+    };
+    for (const DemoStage& stage : stages) if (progress < stage.end) return stage;
+    return stages[5];
+}
+
+// Offline time is independent of GPU speed. Simulate at the same 60 Hz as
+// live play, then interpolate at the requested recording rate. Record normal
+// Player inputs so collision, acceleration, turning and gait remain real.
+bool record_player_demo(Scene& scene, const TileMap& map, Player& player, IsometricCamera camera, MapDrawOptions draw, const Options& options) {
+    const std::filesystem::path directory(options.record_demo);
+    std::error_code error;
+    if (std::filesystem::exists(directory, error) && (!std::filesystem::is_directory(directory, error) || !std::filesystem::is_empty(directory, error))) {
+        ZL_LOG("recording directory must be new or empty: %s", options.record_demo);
+        return false;
+    }
+    std::filesystem::create_directories(directory, error);
+    if (error) { ZL_LOG("cannot create recording directory: %s", error.message().c_str()); return false; }
+    std::ofstream manifest(directory / "frames.json");
+    if (!manifest) { ZL_LOG("cannot write demo manifest"); return false; }
+    const i32 frames = static_cast<i32>(std::ceil(options.demo_seconds * options.demo_fps - 1.0e-9));
+    const bool follow = !options.have_center && !options.whole_map;
+    if (follow) { camera.center = player.position(); camera.center_height = scene.map.surface_height(camera.center, camera.zoom) + 0.5f; }
+    if (options.zoom <= 0 && !options.whole_map) camera.zoom = 128;
+    manifest << std::setprecision(9) << "{\"fps\":" << options.demo_fps << ",\"seconds\":" << options.demo_seconds
+             << ",\"width\":" << options.width << ",\"height\":" << options.height << ",\"seed\":" << map.seed
+             << ",\"map_size\":" << map.width << ",\"resolution\":" << map.resolution << ",\"zoom\":" << camera.zoom
+             << ",\"look\":" << options.look_seed << ",\"hood\":" << (player.look.hood_up ? "true" : "false") << ",\"simulation_hz\":60"
+             << ",\"style\":\"" << (scene.figures.style() == FigureStyle::Painted ? "painted" : "smooth") << "\",\"frames\":[\n";
+    Vec2 previous_camera = camera.center;
+    RenderTarget target;
+    target.create(options.width, options.height);
+    Figure figure;
+    i32 tick = 0;
+    constexpr f32 dt = 1.0f / 60.0f;
+    for (i32 frame = 0; frame < frames; ++frame) {
+        const i32 whole = frame * 60 / options.demo_fps;
+        const f32 alpha = static_cast<f32>(frame * 60 % options.demo_fps) / static_cast<f32>(options.demo_fps);
+        while (tick <= whole) {
+            previous_camera = camera.center;
+            const f32 time = static_cast<f32>(tick) / 60.0f;
+            player.step(map, demo_stage(static_cast<f32>(time / options.demo_seconds)).input, dt);
+            if (follow) camera.center += (player.position() - camera.center) * (1.0f - std::exp(-dt * 9.0f));
+            ++tick;
+        }
+        IsometricCamera view = camera;
+        view.center = lerp(previous_camera, camera.center, alpha);
+        if (follow) view.center_height = scene.map.surface_height(player.position_at(alpha), view.zoom) + 0.5f;
+        const f32 time = static_cast<f32>(frame) / static_cast<f32>(options.demo_fps);
+        draw.time = options.time + time;
+        const HumanMotion motion = player.motion_at(alpha);
+        const Vec2 position = player.position_at(alpha);
+        build_human(player.look, motion, figure);
+        target.bind();
+        scene.draw(view, draw, &figure, position);
+        char filename[32];
+        std::snprintf(filename, sizeof(filename), "frame_%05d.png", frame);
+        const std::string path = (directory / filename).string();
+        if (!write_png(path.c_str(), target.read_pixels())) { ZL_LOG("cannot write %s", path.c_str()); return false; }
+        manifest << (frame ? ",\n" : "") << "{\"file\":\"" << filename << "\",\"time\":" << time
+                 << ",\"stage\":\"" << demo_stage(static_cast<f32>(time / options.demo_seconds)).label << "\",\"x\":" << position.x
+                 << ",\"y\":" << position.y << ",\"speed\":" << motion.speed << ",\"heading\":" << motion.heading
+                 << ",\"phase\":" << motion.phase << ",\"body_activity\":" << motion.body_activity
+                 << ",\"body_run\":" << motion.body_run << ",\"rig\":{";
+        const HumanSkeleton rig = pose_human(player.look, motion);
+        const f32 scale = kTilesPerMetre * player.look.height;
+        const Vec2 forward{std::cos(motion.heading), std::sin(motion.heading)}, right{-forward.y, forward.x};
+        const auto bones = [&](const char* name, std::initializer_list<Vec3> joints, bool first = false) {
+            manifest << (first ? "" : ",") << "\"" << name << "\":[";
+            bool first_joint = true;
+            for (Vec3 joint : joints) {
+                const Vec3 world{(right.x * joint.x + forward.x * joint.y) * scale,
+                                 (right.y * joint.x + forward.y * joint.y) * scale, joint.z * scale};
+                const Vec2 screen = view.world_to_screen(position + Vec2{world.x, world.y},
+                    scene.map.surface_height(position, view.zoom) + world.z - figure.waterline);
+                manifest << (first_joint ? "" : ",") << "[" << screen.x << "," << screen.y << "]";
+                first_joint = false;
+            }
+            manifest << "]";
+        };
+        bones("spine", {rig.pelvis, rig.waist, rig.chest, rig.neck, rig.head}, true);
+        for (int i = 0; i < 2; ++i) {
+            bones(i == 0 ? "left_arm" : "right_arm", {rig.shoulder[i], rig.elbow[i], rig.wrist[i], rig.fingertip[i]});
+            bones(i == 0 ? "left_thumb" : "right_thumb", {rig.wrist[i], rig.thumb[i]});
+            bones(i == 0 ? "left_leg" : "right_leg", {rig.hip[i], rig.knee[i], rig.ankle[i], rig.heel[i], rig.ball[i], rig.toe[i]});
+        }
+        manifest << "}}";
+        if (frame % options.demo_fps == 0) ZL_LOG("recording demo: %d/%d frames", frame + 1, frames);
+    }
+    manifest << "\n]}\n";
+    manifest.close();
+    if (!manifest) { ZL_LOG("could not finish demo manifest"); return false; }
+    ZL_LOG("recorded %d frames to %s", frames, options.record_demo);
+    return true;
+}
+
+// The character from every side and through its strides, on the ground of the
+// start area: a row standing, turned through eight headings; walking and
+// running in profile, towards the viewer and away; seeded people; and explicit
+// front/back hair, beard, hood and blink variants.
+bool save_character_sheet(Scene& scene, const TileMap& map, const Options& options) {
+    constexpr int kColumns = 8, kRows = 8;
+    constexpr f32 kCellWidth = 1.5f, kCellHeight = 1.9f;
+    const f32 zoom = options.zoom > 0.0f ? options.zoom : 96.0f;
+
+    IsometricCamera camera;
+    camera.rotation = options.rotation;
+    camera.zoom = zoom;
+    camera.viewport = {std::round(kColumns * kCellWidth * zoom), std::round(kRows * kCellHeight * zoom)};
+    camera.center = {static_cast<f32>(map.start.x) + 0.5f, static_cast<f32>(map.start.y) + 0.5f};
+    const Camera2D catalogue = static_cast<const Camera2D&>(camera);
+    const Vec2 corner = catalogue.visible_min();
+
+    const HumanLook hero = make_look(options.look_seed, options.hood_up);
+    std::vector<Figure> figures(static_cast<size_t>(kColumns * kRows));
+    std::vector<FigureDraw> draws;
+    for (int row = 0; row < kRows; ++row) {
+        for (int column = 0; column < kColumns; ++column) {
+            const f32 step = static_cast<f32>(column) / static_cast<f32>(kColumns);
+            HumanLook look = hero;
+            HumanMotion motion;
+            motion.time = options.time + 0.9f + static_cast<f32>(column) * 1.37f;
+            switch (row) {
+                case 0: motion.heading = kPi * 0.5f - step * 2.0f * kPi; break;                       // turning on the spot
+                case 1: motion.heading = 0.0f; motion.speed = kWalkSpeed; motion.phase = step; break;   // walking east
+                case 2: motion.heading = kPi * 0.36f; motion.speed = kWalkSpeed; motion.phase = step; break;  // walking towards the viewer
+                case 3: motion.heading = 0.0f; motion.speed = kJogSpeed; motion.phase = step; break;    // running east
+                case 4: motion.heading = -kPi * 0.68f; motion.speed = kSprintSpeed; motion.phase = step; break;  // sprinting away
+                case 5:
+                    look = random_look(static_cast<u64>(column) + 1 + options.look_seed * 8);
+                    motion.heading = kPi * (0.5f - 0.16f * static_cast<f32>(column % 3 - 1));
+                    break;
+                default:
+                    // Guaranteed coverage of all five styles, a beard, a
+                    // raised hood and a blink, from the front and the back.
+                    look.hair_style = static_cast<HairStyle>(column % static_cast<int>(HairStyle::Count));
+                    look.beard = column == 5;
+                    look.hood_up = column == 6;
+                    motion.heading = row == 6 ? kPi * 0.5f : -kPi * 0.5f;
+                    motion.time = column == 7 ? (0.2f + hash_to_unit(hash32(97u)) * 0.6f) * 3.4f : 0.9f;
+                    break;
+            }
+            Figure& figure = figures[static_cast<size_t>(row * kColumns + column)];
+            build_human(look, motion, figure);
+            const Vec2 feet{corner.x + (static_cast<f32>(column) + 0.5f) * kCellWidth, corner.y + (static_cast<f32>(row) + 0.80f) * kCellHeight};
+            draws.push_back({&figure, feet, options.time, 0.0f});
+        }
+    }
+
+    RenderTarget target;
+    target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
+    target.bind();
+    MapDrawOptions draw;
+    draw.time = options.time;
+    scene.map.draw_ground(camera, draw);
+    glDisable(GL_DEPTH_TEST);
+    scene.figures.draw(draws.data(), static_cast<u32>(draws.size()), catalogue);
+    const Image image = target.read_pixels();
+    const bool ok = write_png(options.character_sheet, image);
+    ZL_LOG("%s %s (%dx%d): %d figures, %zu parts each", ok ? "wrote" : "could not write", options.character_sheet, image.width, image.height,
+           kColumns * kRows, figures[0].parts.size());
     return ok;
 }
 
@@ -180,6 +471,43 @@ void bench_view(const char* name, MapRenderer& renderer, const IsometricCamera& 
         glFinish();
     }
     std::printf("  %-10s %6u sprites   submit %7.3f ms   frame %7.3f ms\n", name, renderer.sprites_drawn(), submit_ms / kFrames, total.millis() / kFrames);
+}
+
+// Isolate the procedural figure, including pose construction and data upload.
+// A close-up covers many more fragments than a character at gameplay zoom.
+void bench_figure(FigureRenderer& renderer, const HumanLook& look, Camera2D camera) {
+    RenderTarget target;
+    target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
+    target.bind();
+    camera.center = {0.0f, -0.5f};
+    constexpr int kFrames = 30;
+    for (f32 zoom : {6.0f, kFollowZoom, kMaxZoom}) {
+        camera.zoom = zoom;
+        Figure figure;
+        f64 submit_ms = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            build_human(look, HumanMotion{}, figure);
+            const FigureDraw item{&figure, {0, 0}, 0, zoom < 9.0f ? 1.0f : 0.0f};
+            renderer.draw(&item, 1, camera);
+        }
+        glFinish();
+        const Stopwatch total;
+        for (int i = 0; i < kFrames; ++i) {
+            glClear(GL_COLOR_BUFFER_BIT);
+            const Stopwatch submit;
+            HumanMotion motion;
+            motion.speed = kJogSpeed;
+            motion.phase = static_cast<f32>(i) / kFrames;
+            motion.time = static_cast<f32>(i) / 60.0f;
+            build_human(look, motion, figure);
+            const FigureDraw item{&figure, {0, 0}, motion.time, zoom < 9.0f ? 1.0f : 0.0f};
+            renderer.draw(&item, 1, camera);
+            submit_ms += submit.millis();
+            glFinish();
+        }
+        std::printf("  figure %3.0f px/tile  %zu parts  %u calls   submit %7.3f ms   frame %7.3f ms\n",
+                    zoom, figure.parts.size(), renderer.draw_calls(), submit_ms / kFrames, total.millis() / kFrames);
+    }
 }
 
 // Stress test for the unit path that does not exist yet: `count` sprites that
@@ -247,7 +575,7 @@ int main(int argc, char** argv) {
     WindowConfig config;
     config.width = options.width;
     config.height = options.height;
-    config.visible = options.screenshot == nullptr && !options.bench;
+    config.visible = options.screenshot == nullptr && options.character_sheet == nullptr && !options.bench && options.record_demo == nullptr;
     config.vsync = options.vsync;
     Window window(config);
 
@@ -270,16 +598,44 @@ int main(int argc, char** argv) {
     }
     log_map(map);
 
+    FigureRenderer figures;
+    figures.init();
+    figures.set_style(options.character_style);
+    Scene scene{renderer, figures};
+    if (options.character_sheet) return save_character_sheet(scene, map, options) ? 0 : 1;
+
+    // The player's character, standing at the colony's start.
+    Player player;
+    player.look = make_look(options.look_seed, options.hood_up);
+    const auto place_player = [&](bool posed) {
+        if (!(options.have_player && posed ? player.spawn(map, options.player) : player.spawn(map))) ZL_LOG("the map has no open ground for the character");
+        if (posed) {
+            HumanMotion pose = options.pose;
+            pose.time = options.time;
+            pose.wade = player.motion().wade;
+            player.set_motion(pose);
+        }
+    };
+    place_player(true);
+    Figure figure;
+    // Rebuilds the figure for the moment being drawn; null when there is no character.
+    const auto pose_figure = [&](f32 alpha) -> const Figure* {
+        if (!options.character) return nullptr;
+        build_human(player.look, player.motion_at(alpha), figure);
+        return &figure;
+    };
+    // The camera looks at the character's middle rather than its feet.
+    const auto player_focus = [&](f32 alpha) { return player.position_at(alpha); };
+
     IsometricCamera camera;
     camera.rotation = options.rotation;
     camera.viewport = {static_cast<f32>(options.width), static_cast<f32>(options.height)};
-    if (options.whole_map) renderer.frame_map(camera);
+    if (options.whole_map) frame_whole_map(camera, map, renderer);
     else frame_start(camera, map, renderer);
-    if (options.have_center) {
-        camera.center = options.center;
-        camera.center_height = renderer.ground_height(camera.center);
-    }
+    if (options.character && options.have_player) camera.center = player_focus(1.0f);
+    if (options.have_center) camera.center = options.center;
     if (options.zoom > 0.0f) camera.zoom = options.zoom;
+    if (options.have_center || options.have_player) camera.center_height = renderer.surface_height(camera.center, camera.zoom);
 
     MapDrawOptions draw;
     draw.time = options.time;
@@ -287,33 +643,53 @@ int main(int argc, char** argv) {
     draw.grid = options.grid;
     draw.shadows = options.shadows;
 
+    if (options.record_demo) return record_player_demo(scene, map, player, camera, draw, options) ? 0 : 1;
+
     if (options.bench) {
-        std::printf("isometric renderer, %dx%d, up to 3 visible draws plus 2 cached shadow draws\n", options.width, options.height);
+        std::printf("isometric renderer, %dx%d, 3 visible draws plus 2 cached shadow draws\n", options.width, options.height);
         IsometricCamera view = camera;
         frame_start(view, map, renderer);
         bench_view("start", renderer, view);
         view.zoom = 12.0f;
         bench_view("zoomed out", renderer, view);
-        renderer.frame_map(view);
+        frame_whole_map(view, map, renderer);
         bench_view("whole map", renderer, view);
+
+        for (FigureStyle style : {FigureStyle::Painted, FigureStyle::Smooth}) {
+            figures.set_style(style);
+            std::printf("procedural figure, %s (pose + upload + shader + composite)\n", style == FigureStyle::Painted ? "painted sprite" : "smooth");
+            bench_figure(figures, player.look, camera);
+        }
+        figures.set_style(options.character_style);
 
         std::printf("sprite batch, 1 draw call per frame\n");
         SpriteBatch horde;
         horde.init();
-        Camera2D stress;
-        stress.viewport = camera.viewport;
-        stress.center = {static_cast<f32>(map.width) * 0.5f, static_cast<f32>(map.height) * 0.5f};
-        stress.zoom = std::min(stress.viewport.x / static_cast<f32>(map.width), stress.viewport.y / static_cast<f32>(map.height));
-        for (const u32 count : {10000u, 100000u, 250000u}) bench_horde(count, renderer, map, jobs, horde, stress);
+        for (const u32 count : {10000u, 100000u, 250000u}) bench_horde(count, renderer, map, jobs, horde, static_cast<const Camera2D&>(view));
         return 0;
     }
 
-    if (options.screenshot) return save_screenshot(renderer, camera, draw, options.screenshot) ? 0 : 1;
+    if (options.screenshot) return save_screenshot(scene, camera, draw, pose_figure(1.0f), player.position(), options.screenshot) ? 0 : 1;
 
     // --- interactive loop ---
     FixedStep sim(60.0);
     f64 last = now_seconds(), title_timer = 0.0, frame_ms_sum = 0.0;
     int frames = 0, shot_index = 0;
+    // The camera follows the character until the player switches to management
+    // mode with Space.
+    bool follow = options.character && !options.whole_map && !options.have_center;
+    f32 saved_follow_zoom = options.zoom > 0.0f ? options.zoom : kFollowZoom;
+    f32 saved_management_zoom = kManagementZoom;
+    CameraModeSwitch mode_switch;
+    PlayerAutonomy autonomy;
+    u64 autonomy_switches = 0;
+    autonomy.reset(player.position(), map.seed);
+    u64 look_seed = options.look_seed;
+    if (follow) {
+        camera.center = player_focus(1.0f);
+        if (options.zoom <= 0.0f) camera.zoom = kFollowZoom;
+        camera.center_height = renderer.surface_height(camera.center, camera.zoom) + 0.5f;
+    }
 
     while (!window.should_close()) {
         window.poll();
@@ -325,27 +701,70 @@ int main(int argc, char** argv) {
         const IVec2 fb = window.framebuffer_size();
         if (fb.x <= 0 || fb.y <= 0) continue;  // minimised
         camera.viewport = {static_cast<f32>(fb.x), static_cast<f32>(fb.y)};
+        const f32 min_zoom = fit_zoom(map, camera.viewport) * 0.7f;
+        const f32 max_zoom = options.character ? kMaxZoom : 128.0f;
 
         if (in.pressed(Key::Escape)) window.request_close();
-        if (in.pressed(Key::R) || in.pressed(Key::Space)) {
+        if (in.pressed(Key::R)) {
             options.map.seed += 1;
             map = generate_map(options.map, jobs);
             renderer.set_map(map, jobs);
             log_map(map);
-            camera.center_height = renderer.ground_height(camera.center);
+            place_player(false);
+            autonomy.reset(player.position(), map.seed);
+            mode_switch.cancel();
+            if (follow) {
+                camera.center = player_focus(1.0f);
+                camera.center_height = renderer.surface_height(camera.center, camera.zoom) + 0.5f;
+            }
+        }
+        if (in.pressed(Key::Q) || in.pressed(Key::E)) {
+            Vec2 pivot;
+            if (!follow && renderer.pick(camera, camera.viewport * 0.5f, pivot)) {
+                camera.center = pivot;
+                camera.center_height = renderer.surface_height(pivot, camera.zoom);
+            }
+            mode_switch.cancel();
+            camera.turn(in.pressed(Key::E) ? 1 : -1);
         }
         if (in.pressed(Key::G)) draw.grid = !draw.grid;
         if (in.pressed(Key::V)) draw.overlay = static_cast<MapOverlay>((static_cast<int>(draw.overlay) + 1) % static_cast<int>(MapOverlay::Count));
-        if (in.pressed(Key::Q) || in.pressed(Key::E)) {
-            Vec2 focus;
-            if (renderer.pick(camera, camera.viewport * 0.5f, focus)) {
-                camera.center = focus;
-                camera.center_height = renderer.surface_height(focus, camera.zoom);
-            }
-            camera.turn(in.pressed(Key::E) ? 1 : -1);
+        if (in.pressed(Key::F) && !follow) {
+            frame_whole_map(camera, map, renderer);
+            mode_switch.cancel();
         }
-        if (in.pressed(Key::F)) renderer.frame_map(camera);
-        if (in.pressed(Key::H)) frame_start(camera, map, renderer);
+        if (in.pressed(Key::H)) {
+            mode_switch.cancel();
+            if (options.character) {
+                camera.center = player_focus(static_cast<f32>(sim.alpha()));
+                camera.center_height = renderer.surface_height(camera.center, camera.zoom) + 0.5f;
+                if (follow) saved_follow_zoom = camera.zoom = kFollowZoom;
+            } else {
+                frame_start(camera, map, renderer);
+            }
+        }
+        if (options.character) {
+            if (in.pressed(Key::Space)) {
+                follow = !follow;
+                const Vec2 focus = player_focus(static_cast<f32>(sim.alpha()));
+                if (!follow) {
+                    saved_follow_zoom = clamp(camera.zoom, min_zoom, kMaxZoom);
+                    const f32 target_zoom = clamp(saved_management_zoom, min_zoom, kMaxZoom);
+                    const f32 heading = player.motion().heading;
+                    const Vec2 look_dir{std::cos(heading), std::sin(heading)};
+                    mode_switch.begin_to_management(camera, focus, look_dir, target_zoom);
+                    autonomy.reset(player.position(), map.seed ^ (++autonomy_switches * 0x9E3779B97F4A7C15ull));
+                } else {
+                    if (camera.zoom > min_zoom * 1.2f) saved_management_zoom = clamp(camera.zoom, min_zoom, kMaxZoom);
+                    const f32 target_zoom = clamp(saved_follow_zoom, min_zoom, kMaxZoom);
+                    mode_switch.begin_to_character(camera, target_zoom);
+                }
+            }
+            if (in.pressed(Key::C)) player.look = make_look(++look_seed, false);
+            if (in.pressed(Key::Num1)) player.look = make_look(look_seed = 0, false);
+            if (in.pressed(Key::X)) player.look.hood_up = !player.look.hood_up;
+            if (in.pressed(Key::F6)) figures.set_style(figures.style() == FigureStyle::Painted ? FigureStyle::Smooth : FigureStyle::Painted);
+        }
         if (in.pressed(Key::F5)) {
             const std::string assets = find_assets(options.assets);
             const Stopwatch timer;
@@ -355,43 +774,87 @@ int main(int argc, char** argv) {
                    art.painted_sprites ? "painted" : "placeholder", timer.millis());
         }
 
-        // Camera: keyboard pan at a constant on-screen speed, drag to grab the
-        // map, wheel zooms about the cursor.
-        Vec2 pan{0, 0};
-        if (in.down(Key::A) || in.down(Key::Left)) pan.x -= 1.0f;
-        if (in.down(Key::D) || in.down(Key::Right)) pan.x += 1.0f;
-        if (in.down(Key::W) || in.down(Key::Up)) pan.y -= 1.0f;
-        if (in.down(Key::S) || in.down(Key::Down)) pan.y += 1.0f;
-        const f32 speed = in.down(Key::LeftShift) ? 2400.0f : 1000.0f;
-        if (length(pan) > 0.0f) pan = pan / length(pan);
-        camera.center += camera.screen_delta_to_world(pan * (speed * static_cast<f32>(dt)));
-        if (in.down(MouseButton::Right) || in.down(MouseButton::Middle)) camera.center -= camera.screen_delta_to_world(in.mouse_delta);
+        // The direction keys steer the character while the camera follows it.
+        // In management mode (or without a character) the camera behaves like a
+        // city builder: cursor near the window borders, WASD/arrows or
+        // right/middle-drag all pan across the map.
+        Vec2 keys{0, 0};
+        if (in.down(Key::A) || in.down(Key::Left)) keys.x -= 1.0f;
+        if (in.down(Key::D) || in.down(Key::Right)) keys.x += 1.0f;
+        if (in.down(Key::W) || in.down(Key::Up)) keys.y -= 1.0f;
+        if (in.down(Key::S) || in.down(Key::Down)) keys.y += 1.0f;
+        PlayerInput input;
+        Vec2 pan_delta{0, 0};
+        if (follow) {
+            input.move = camera.screen_delta_to_world(keys * camera.zoom);
+            input.sprint = in.down(Key::LeftShift);
+            input.walk = in.down(Key::LeftControl);
+        } else {
+            const bool dragging = in.down(MouseButton::Right) || in.down(MouseButton::Middle);
+            const Vec2 border = dragging ? Vec2{0, 0} : edge_pan(in.mouse, camera.viewport, in.mouse_inside, kEdgePanMargin);
+            Vec2 pan = keys + border;
+            const f32 pan_len = length(pan);
+            if (pan_len > 1.0f) pan = pan / pan_len;
+            const f32 speed = in.down(Key::LeftShift) ? 2400.0f : 1000.0f;
+            pan_delta = camera.screen_delta_to_world(pan * (speed * static_cast<f32>(dt)));
+            if (dragging) pan_delta -= camera.screen_delta_to_world(in.mouse_delta);
+            camera.center += pan_delta;
+        }
+
+        // The simulation ticks at a fixed rate; in management mode the
+        // character wanders the local area autonomously.
+        const int steps = sim.advance(dt);
+        if (options.character) {
+            const f32 step_dt = static_cast<f32>(sim.step_seconds());
+            for (int k = 0; k < steps; ++k) {
+                const PlayerInput step_input = follow ? input : autonomy.step(map, player, step_dt);
+                player.step(map, step_input, step_dt);
+            }
+        }
+        const f32 alpha = static_cast<f32>(sim.alpha());
+        draw.time = static_cast<f32>(now);
+
+        // The wheel zooms about the cursor in management mode, or about the
+        // character while following.
+        const Vec2 focus = player_focus(alpha);
         if (in.scroll != 0.0f) {
-            Vec2 anchor;
-            const bool hit = renderer.pick(camera, in.mouse, anchor);
-            const f32 height = hit ? renderer.surface_height(anchor, camera.zoom) : camera.center_height;
-            if (!hit) anchor = camera.screen_to_world(in.mouse, height);
-            camera.zoom = clamp(camera.zoom * std::pow(1.15f, in.scroll), fit_zoom(map, camera.viewport) * 0.5f, 128.0f);
-            const f32 new_height = hit ? renderer.surface_height(anchor, camera.zoom) : height;
-            camera.center += anchor - camera.screen_to_world(in.mouse, new_height);
+            mode_switch.cancel_zoom();
+            if (follow) {
+                camera.zoom = clamp(camera.zoom * std::pow(1.15f, in.scroll), min_zoom, kMaxZoom);
+                saved_follow_zoom = camera.zoom;
+            } else {
+                Vec2 anchor;
+                const bool hit = renderer.pick(camera, in.mouse, anchor);
+                const f32 height = hit ? renderer.surface_height(anchor, camera.zoom) : camera.center_height;
+                if (!hit) anchor = camera.screen_to_world(in.mouse, height);
+                camera.zoom = clamp(camera.zoom * std::pow(1.15f, in.scroll), min_zoom, max_zoom);
+                camera.center += anchor - camera.screen_to_world(in.mouse, hit ? renderer.surface_height(anchor, camera.zoom) : height);
+                saved_management_zoom = camera.zoom;
+            }
+        }
+        const f32 switch_pulse = mode_switch.step(camera, focus, pan_delta, static_cast<f32>(dt), min_zoom, max_zoom);
+        if (follow && !mode_switch.active) {
+            camera.center += (focus - camera.center) * (1.0f - std::exp(-static_cast<f32>(dt) * 9.0f));
+        }
+        if (follow || mode_switch.active) {
+            const f32 target_height = renderer.surface_height(camera.center, camera.zoom) + (follow ? 0.5f : 0.0f);
+            camera.center_height += (target_height - camera.center_height) * (1.0f - std::exp(-static_cast<f32>(dt) * 9.0f));
         }
         camera.center.x = clamp(camera.center.x, 0.0f, static_cast<f32>(map.width));
         camera.center.y = clamp(camera.center.y, 0.0f, static_cast<f32>(map.height));
 
-        // The simulation will tick here at a fixed rate; nothing moves yet.
-        const int steps = sim.advance(dt);
-        (void)steps;
-        draw.time = static_cast<f32>(now);
-
         const Stopwatch frame_timer;
         RenderTarget::bind_default(fb.x, fb.y);
-        renderer.draw(camera, draw);
+        const Figure* posed = pose_figure(alpha);
+        const Vec2 standing = player.position_at(alpha);
+        const f32 management_ring = !follow ? (1.0f - smoothstep(26.0f, 44.0f, camera.zoom)) * 0.32f : 0.0f;
+        scene.draw(camera, draw, posed, standing, std::max(switch_pulse, management_ring));
         frame_ms_sum += frame_timer.millis();
         ++frames;
 
         if (in.pressed(Key::F2)) {
             const std::string path = "zillions_" + std::to_string(map.seed) + "_" + std::to_string(shot_index++) + ".png";
-            save_screenshot(renderer, camera, draw, path.c_str());
+            save_screenshot(scene, camera, draw, posed, standing, path.c_str());
         }
 
         window.swap_buffers();
@@ -399,9 +862,11 @@ int main(int argc, char** argv) {
         title_timer += dt;
         if (title_timer >= 0.5) {
             char title[200];
-            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | isometric %d deg | Q/E rotate",
+            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | isometric %d deg | Q/E rotate%s%s",
                           static_cast<unsigned long long>(map.seed), map.width, map.height, frames / title_timer, frame_ms_sum / frames,
-                          renderer.sprites_drawn(), camera.rotation * 90);
+                          renderer.sprites_drawn(), camera.rotation * 90,
+                          options.character ? (figures.style() == FigureStyle::Painted ? " | painted sprite" : " | smooth") : "",
+                          options.character && !follow ? " | management mode (Space)" : "");
             window.set_title(title);
             title_timer = 0.0;
             frame_ms_sum = 0.0;

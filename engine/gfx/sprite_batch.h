@@ -48,6 +48,8 @@ public:
     // blending, so write them back to front.
     void draw(u32 count, const Camera2D& camera, const Texture& atlas,
               const ShadowView* shadows = nullptr, const IsometricCamera* world_camera = nullptr, f32 depth_scale = 1.0f);
+    void draw(u32 count, const Camera2D& camera, u32 atlas_texture,
+              const ShadowView* shadows = nullptr, const IsometricCamera* world_camera = nullptr, f32 depth_scale = 1.0f);
 
 private:
     Shader shader_;
