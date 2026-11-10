@@ -45,7 +45,7 @@ smooth procedural drawing; animation stays live in both styles.
 The [character notes](docs/character.md) explain the rig, gait and shader and
 record the visual and performance checks.
 
-![Character poses, gaits and looks](docs/character/poses.png)
+![Recorded player demo: idle, walk, turn, jog, sprint and stop](docs/character/player-demo.gif)
 
 ## Building
 
@@ -74,6 +74,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
          [--no-character] [--player X Y] [--heading DEG] [--speed M --phase P]
          [--look N] [--hood] [--time SECONDS] [--character-sheet FILE]
          [--character-style painted|smooth]
+         [--record-demo DIR --demo-seconds N --demo-fps N]
          [--overlay height|pass] [--grid] [--bench]
 ```
 
@@ -124,6 +125,38 @@ line on every border a cliff blocks:
 
 ![Height overlay](docs/screenshots/overlay-height.jpg)
 
+## Recording GIF demos
+
+The debug recorder generates a repeatable demo through the actual player
+controller and renderer: idle, profile walk, turn towards the camera, jog,
+sprint away, then stop. The default is an eight-second looping GIF, with
+captions showing the stage, time, gait speed and stride phase.
+
+```sh
+python3 -m pip install -r tools/requirements-debug.txt
+python3 tools/record_demo.py out/player-demo.gif
+```
+
+It writes a JSON state log beside the GIF. `--style smooth`, `--look N`,
+`--hood`, `--zoom`, `--width`, `--height`, `--fps`, `--seconds` and `--colors`
+make targeted reviews easy. `--no-captions` writes the scene alone;
+`--rig-overlay` shows the actual arm/leg joints in cyan and orange;
+`--keep-frames out/demo-frames` retains the source PNGs in a new or empty
+directory. Pass `--binary PATH` for another build. Run `--help` for limits.
+The state log includes the projected joints as well as movement and pose blends.
+
+The simulation always runs at 60 Hz and capture time is independent of render
+speed. A shared GIF palette keeps colours stable; delays preserve the clip's
+duration at frame rates such as 24 fps. On Linux with no `DISPLAY`, the tool
+starts `xvfb-run` automatically when Xvfb is installed.
+
+For PNGs without GIF encoding, use the game directly:
+
+```sh
+./build/game/zillions --seed 7 --size 256 --resolution 1 --width 512 --height 384 \
+  --zoom 128 --record-demo out/demo-frames --demo-seconds 8 --demo-fps 20
+```
+
 ## Layout
 
 ```
@@ -135,8 +168,8 @@ game/world       tile map, map generator, CPU preview        (headless)
 game/actor       human rig, gait, looks and player controller (headless)
 game/render      terrain and figure shaders, relief, art loading and placeholders
 game/app         the viewer executable
-tools/           zl_mapgen
-tests/           headless test suite
+tools/           zl_mapgen, artwork export, GIF demo recorder
+tests/           headless, GPU and GIF encoder checks
 assets/          painted ground textures and sprites, and their source sheets
 ```
 

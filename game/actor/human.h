@@ -60,6 +60,10 @@ struct HumanMotion {
     // m/s^2, smoothed. Loose things swing against it and the trunk leans with it.
     Vec2 lag{0.0f, 0.0f};
     f32 wade = 0.0f;           // depth of the water stood in, metres
+    // Player-driven torso/arm blends settle independently of ground speed. Negative
+    // values derive them from speed, for standalone poses and review sheets.
+    f32 body_activity = -1.0f;
+    f32 body_run = -1.0f;
 };
 
 // How the legs move at a given speed.
@@ -84,7 +88,7 @@ struct HumanSkeleton {
     Vec3 pelvis, waist, chest, neck, head;
     Vec3 hip[2], knee[2], ankle[2];
     Vec3 heel[2], ball[2], toe[2];  // points on the sole
-    Vec3 shoulder[2], elbow[2], wrist[2], fingertip[2];
+    Vec3 shoulder[2], elbow[2], wrist[2], fingertip[2], thumb[2];
     bool planted[2] = {true, true};  // the foot is bearing weight
 };
 

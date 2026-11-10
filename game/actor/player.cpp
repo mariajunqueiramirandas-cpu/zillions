@@ -124,7 +124,8 @@ void Player::step(const TileMap& map, const PlayerInput& input, f32 dt) {
     const f32 old_heading = m.heading;
     if (moving) {
         const f32 want = std::atan2(wish.y, wish.x);
-        m.heading += angle_between(m.heading, want) * (1.0f - std::exp(-dt * 13.0f));
+        const f32 limit = lerp(3.0f * kPi, 2.0f * kPi, human_gait(pace).run) * dt;
+        m.heading += clamp(angle_between(m.heading, want) * (1.0f - std::exp(-dt * 13.0f)), -limit, limit);
         m.heading = std::fmod(m.heading, kTau);
     }
     const f32 turn = angle_between(old_heading, m.heading) / dt;
@@ -139,13 +140,25 @@ void Player::step(const TileMap& map, const PlayerInput& input, f32 dt) {
     // ground it covers. Quickening the step a little splits the difference.
     const f32 toward = forward.y * forward.y;
     m.speed = ground_speed * (1.0f + 0.28f * toward);
+    // Smooth torso and arm transitions without smoothing the travelled
+    // distance that drives the feet. This also lets a blocked player settle.
+    const HumanGait previous_gait = human_gait(previous_motion_.speed);
+    const f32 previous_activity = previous_motion_.body_activity < 0.0f ? previous_gait.weight : previous_motion_.body_activity;
+    const f32 previous_run = previous_motion_.body_run < 0.0f ? previous_gait.run : previous_motion_.body_run;
+    m.body_activity = lerp(previous_activity, human_gait(m.speed).weight, 1.0f - std::exp(-dt * 6.0f));
+    m.body_run = lerp(previous_run, moving ? human_gait(pace).run : 0.0f, 1.0f - std::exp(-dt * 6.0f));
     m.phase += m.speed / human_gait(m.speed).cycle * dt;
     m.phase -= std::floor(m.phase);
     m.time += dt;
 
     // What the body feels: its change of velocity, in its own frame.
     const Vec2 accel = (velocity_ - old_velocity) / (dt * metre);
-    const Vec2 felt{dot(accel, right), dot(accel, forward)};
+    Vec2 felt{dot(accel, right), dot(accel, forward)};
+    // A blocked movement step can report an arbitrarily large impulse. Let
+    // collision stop the body immediately, but keep visual lean/gear inertia
+    // within a human acceleration range instead of snapping the rig upright.
+    const f32 felt_length = length(felt);
+    if (felt_length > 10.0f) felt = felt * (10.0f / felt_length);
     m.lag += (felt - m.lag) * (1.0f - std::exp(-dt * 7.0f));
 
     m.wade += ((wading ? kWadeDepth : 0.0f) - m.wade) * (1.0f - std::exp(-dt * 8.0f));
@@ -169,6 +182,12 @@ HumanMotion Player::motion_at(f32 alpha) const {
     m.turn = lerp(a.turn, b.turn, alpha);
     m.lag = lerp(a.lag, b.lag, alpha);
     m.wade = lerp(a.wade, b.wade, alpha);
+    const auto pose_blend = [alpha](f32 x, f32 y, f32 fallback_x, f32 fallback_y) {
+        return x < 0.0f && y < 0.0f ? -1.0f : lerp(x < 0.0f ? fallback_x : x, y < 0.0f ? fallback_y : y, alpha);
+    };
+    const HumanGait ga = human_gait(a.speed), gb = human_gait(b.speed);
+    m.body_activity = pose_blend(a.body_activity, b.body_activity, ga.weight, gb.weight);
+    m.body_run = pose_blend(a.body_run, b.body_run, ga.run, gb.run);
     return m;
 }
 

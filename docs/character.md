@@ -21,6 +21,27 @@ for comparison, or select `--character-style painted|smooth` at startup.
 
 ![Smooth drawing above, live painted sprites below](character/styles.jpg)
 
+## Recorded animation demo
+
+![Eight-second player movement and animation recording](character/player-demo.gif)
+
+`python3 tools/record_demo.py out/player-demo.gif` records the normal controller
+and renderer, including acceleration, turning, gait changes and camera follow.
+The eight-second script idles, walks east in profile, turns towards the viewer,
+jogs west, sprints north and settles. It simulates at 60 Hz and interpolates
+each requested capture time, so GPU speed does not change the movement or the
+GIF's timing. A shared palette and soft painted rendering preserve the look.
+
+The GIF's accompanying JSON logs position, heading, gait speed, stride phase,
+torso/arm blends and the projected joints for every captured frame. The
+committed [demo state log](character/player-demo.json)
+matches this preview. Use `--keep-frames DIR` to retain the PNGs and raw capture
+manifest for closer inspection. `--style smooth`, `--look`, `--hood`, `--zoom`
+and the frame rate/size/duration options support focused comparisons.
+`--rig-overlay` draws the actual joints over the character: cyan on the left,
+orange on the right, with a pale spine. It exposes the limbs hidden by the
+torso, so pose and rendering problems can be reviewed separately.
+
 ## Rig and gait
 
 `HumanLook` holds body scale, build, colours and clothing choices. `hero_look()`
@@ -41,7 +62,10 @@ travels backwards by exactly the body's travelled distance. Swing clears the
 ground and returns to the next strike. Two-bone inverse kinematics preserves
 thigh and shin lengths, pulling unreachable feet towards the hip. Sole points
 are kept above the ground. The pelvis rises and shifts, the shoulders counter-
-rotate, and the arms bend and drive with speed. Breathing, glances, blinking,
+rotate, and the arms counter-swing against the legs. Each elbow bends about a
+stable hinge, and the wrist/thumb frame follows that hinge. Walking uses a
+small relaxed bend; jogging and sprinting keep the elbows folded and the hands
+in loose fists. Breathing, glances, blinking,
 turning and acceleration add small secondary motion.
 
 The skin hangs hose, boots, tunic, cuffs, shoulder cape, head, hair and gear on
@@ -52,6 +76,11 @@ out seven degrees at rest; the heel offset and rounded rear cap together stop
 at the ankle shaft, avoiding a protruding heel. The cape uses flatter, cut
 panels with dark hems. The three skirt panels share one hem height and vertical
 hem bands.
+
+The satchel rests behind the left hip and the belt purse sits further forward.
+The carrying arm leaves room for the bag at a walk, including its outward
+swing under acceleration. These positions keep hands outside the torso and
+gear instead of letting the fingers disappear into them during the cycle.
 
 ## Movement and camera
 
@@ -69,10 +98,15 @@ pushing against a wall stops the stride. A small direction-dependent cadence
 adjustment compensates for the figure's projected depth. Position, heading and
 wrapped stride phase interpolate between fixed steps for rendering. Camera
 follow eases towards the character's middle; Tab releases it and H returns.
+Turning is capped at 540 degrees/s when walking and 360 degrees/s when running.
+Torso/arm activity and running blends ease independently of foot travel, so
+the elbows and chest settle through gait changes and sudden stops. Visual
+acceleration is limited to 10 m/s² before filtering, preventing a hard terrain
+collision from applying a one-frame impulse to the pose or loose gear.
 
 ## Figure shader and scene ordering
 
-A figure contains at most 128 parts; the hero uses 88. Each part occupies four
+A figure contains at most 128 parts; the hero uses 90. Each part occupies four
 RGBA32F texels: projected endpoints; radii and depths; heights, roundness and
 packed material/flags; colour and surface group. The row is padded to 128
 parts. Materials are cloth, skin, leather, hair and metal. Flat caps and the
@@ -120,12 +154,15 @@ slices are skipped.
 
 ## Validation
 
-The full and `ZL_BUILD_APP=OFF` builds run the same 20 headless tests. Character
+The full and `ZL_BUILD_APP=OFF` builds run the same 22 headless tests. Character
 coverage samples 24 looks over 65 cycle phases at eight speeds, including
 turning and acceleration. It checks bone lengths, sole clearance, finite
 parts, renderer capacity, bounds, phase wrapping, planted soles, seeded looks,
 obstacle/cliff/ramp collision, wall sliding, ford slowdown, repeatable replays,
 spawn relocation, map edges and interpolation.
+Arm checks add anatomical bend limits, walking reach, counter-swing, wrist and
+thumb continuity, torso/gear clearance across body builds, smooth gait changes,
+bounded turning and settling after a wall collision.
 
 `zl_render_tests` additionally runs the actual OpenGL shaders and texture
 composition. It checks premultiplied transparency, upright sprites, multiple
@@ -135,6 +172,19 @@ draw/read framebuffer restoration, viewport offsets, clear colour and the
 
 ```sh
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./build/tests/zl_render_tests
+```
+
+The GIF encoder checks run with `python3 -m unittest discover -s tests -p
+test_record_demo.py`. They decode generated GIFs to verify animation, looping,
+24 fps delay rounding, stable background colours and captions, and verify that
+a failed encode preserves an existing GIF and removes its temporary file.
+They also verify that the rig overlay keeps its left/right colours after GIF
+quantization. Opt-in capture checks compare frame/state hashes between replays,
+check fractional durations and preserve existing recording directories:
+
+```sh
+ZL_GAME_BINARY="$PWD/build/game/zillions" xvfb-run -a \
+  python3 -m unittest discover -s tests -p test_demo_capture.py
 ```
 
 The live window was exercised under Xvfb with Mesa llvmpipe: F6 painted/smooth
@@ -160,9 +210,9 @@ Mesa llvmpipe software renderer at 800×600 measured:
 
 | View (pixels/tile) | Painted sprite (ms/frame) | Smooth (ms/frame) |
 |---|---:|---:|
-| 6 | 1.71 | 1.27 |
-| 64 | 5.15 | 4.40 |
-| 256 | 4.66 | 61.49 |
+| 6 | 2.80 | 1.45 |
+| 64 | 5.28 | 4.69 |
+| 256 | 5.43 | 64.52 |
 
 The additional atlas/composition pass has a small cost at normal zoom. At
 close-up zoom the figure shader still runs at its sprite resolution, keeping

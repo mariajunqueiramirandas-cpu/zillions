@@ -164,17 +164,20 @@ struct Rig {
     Frame foot[2];
     Vec3 toe_dir[2];
     Vec3 fore_dir[2], hand_dir[2];
-    Vec3 arm_forward[2];  // the way a hanging hand's thumb points
+    Vec3 thumb_dir[2];
     f32 breath = 0.0f;    // -1..1
     Vec3 swing;           // where loose things are thrown, metres in the body frame
     bool blink = false;
+    f32 arm_grip = 0.0f;
 };
 
 Rig pose(const HumanLook& look, const HumanMotion& m) {
     Rig rig;
     const HumanGait gait = human_gait(m.speed);
     rig.gait = gait;
-    const f32 w = gait.weight, run = gait.run, still = 1.0f - w;
+    const f32 w = m.body_activity < 0.0f ? gait.weight : saturate(m.body_activity);
+    const f32 run = m.body_run < 0.0f ? gait.run : saturate(m.body_run);
+    const f32 still = 1.0f - w;
     const f32 sprint = smoothstep(3.4f, 5.6f, m.speed);
     const f32 p = fract(m.phase);
     const f32 stride = std::cos(kTau * p);        // +1 as the left heel strikes
@@ -234,15 +237,15 @@ Rig pose(const HumanLook& look, const HumanMotion& m) {
         const FootPose step = gait_foot(fract(p + (i == 0 ? 0.0f : 0.5f)), gait);
         // Standing: feet apart and turned out, the left a little ahead.
         const Vec3 standing{sign * 0.105f * bw, -sign * 0.018f, kAnkleHeight};
-        const Vec3 walking{sign * lerp(0.085f, 0.055f, run) * bw, step.forward, step.height};
-        Vec3 ankle = lerp(standing, walking, w);
-        const f32 turnout = sign * lerp(rad(7.0f), rad(4.0f), w);
+        const Vec3 walking{sign * lerp(0.085f, 0.055f, gait.run) * bw, step.forward, step.height};
+        Vec3 ankle = lerp(standing, walking, gait.weight);
+        const f32 turnout = sign * lerp(rad(7.0f), rad(4.0f), gait.weight);
 
         Frame flat = yaw(base, turnout);
-        Frame F = pitch(flat, -step.pitch * w);
+        Frame F = pitch(flat, -step.pitch * gait.weight);
         F.o = ankle;
         Vec3 heel = F.at(0.0f, -kHeelBack, -kAnkleHeight), ball = F.at(0.0f, kBallAhead, -kAnkleHeight);
-        const Vec3 toe_dir = normalize(lerp(F.f, flat.f, lerp(1.0f, step.toes_flat, w)));
+        const Vec3 toe_dir = normalize(lerp(F.f, flat.f, lerp(1.0f, step.toes_flat, gait.weight)));
         Vec3 toe = ball + toe_dir * kToeLength;
         // Nothing goes through the ground.
         const f32 low = std::min({heel.z, ball.z, toe.z});
@@ -267,44 +270,65 @@ Rig pose(const HumanLook& look, const HumanMotion& m) {
         s.heel[i] = heel;
         s.ball[i] = ball;
         s.toe[i] = toe;
-        s.planted[i] = w < 0.5f || step.planted;
+        s.planted[i] = gait.weight < 0.5f || step.planted;
         rig.foot[i] = F;
         rig.toe_dir[i] = toe_dir;
     }
 
+    // Loose things lag behind a change of pace and bounce with each step.
+    // Compute this before posing the carrying arm so it can leave room for
+    // the satchel's outward/forward swing as well as its resting position.
+    rig.swing = {clamp(-m.lag.x * 0.0035f, -0.05f, 0.05f), clamp(-m.lag.y * 0.0035f, -0.05f, 0.05f),
+                 w * lerp(0.004f, 0.012f, run) * std::sin(2.0f * kTau * (mid - 0.08f))};
+
     // --- arms: each swings against the leg on its own side; straight and loose
     // when walking, folded and driving when running.
+    const f32 arm_weight = w;
+    const f32 arm_run = run;
+    rig.arm_grip = arm_weight * arm_run;
     const f32 arm = std::cos(kTau * (p - 0.02f));
     for (int i = 0; i < 2; ++i) {
         const f32 sign = i == 0 ? -1.0f : 1.0f;
         const f32 beat = sign * arm;  // +1 with this arm fully forward
-        const f32 theta = w * lerp(rad(2.0f), rad(-8.0f), run) + still * rad(3.0f) + w * lerp(rad(21.0f), rad(42.0f), run) * beat;
-        const f32 walk_flex = rad(15.0f) + rad(15.0f) * std::max(beat, 0.0f);
-        const f32 run_flex = rad(86.0f) + rad(13.0f) * beat;
-        const f32 flex = lerp(rad(10.0f), lerp(walk_flex, run_flex, run), w);
-        const f32 spread = lerp(rad(8.0f), lerp(rad(7.0f), rad(13.0f), run), w);
+        const f32 theta = arm_weight * lerp(rad(0.0f), rad(6.0f), arm_run) + (1.0f - arm_weight) * rad(3.0f) + arm_weight * lerp(rad(17.0f), rad(32.0f), arm_run) * beat;
+        const f32 walk_flex = rad(14.0f) + rad(3.0f) * beat;
+        const f32 run_flex = rad(88.0f) + rad(6.0f) * beat;
+        const f32 flex = lerp(rad(10.0f), lerp(walk_flex, run_flex, arm_run), arm_weight);
+        // A bag carrier gives that hip a little extra room at a walk. Running
+        // already brings the hands forward, away from the satchel behind it.
+        const f32 bag_swing = std::max(-rig.swing.x, 0.0f) + 0.65f * std::max(rig.swing.y, 0.0f);
+        const f32 bag_clearance = look.satchel && i == 0 ? (rad(7.0f) + bag_swing / (kUpperArmLength + kForearmLength)) * (1.0f - rig.arm_grip) : 0.0f;
+        const f32 spread = lerp(rad(7.0f), lerp(rad(7.0f), rad(10.0f), arm_run), arm_weight) + bag_clearance;
 
         const Vec3 down = C.u * -std::cos(theta) + C.f * std::sin(theta);
         const Vec3 forward = C.f * std::cos(theta) + C.u * std::sin(theta);
         const Vec3 out = C.r * sign;
         const Vec3 upper = normalize(down * std::cos(spread) + out * std::sin(spread));
-        // A runner's forearms cross in front of the body.
-        const f32 inward = w * lerp(0.04f, 0.34f, run) * std::sin(flex);
-        const Vec3 fore = normalize(upper * std::cos(flex) + forward * std::sin(flex) - out * inward);
-        const Vec3 hand = normalize(fore * std::cos(rad(14.0f)) + forward * std::sin(rad(14.0f)));
+        // Bend about one anatomical hinge. Only a small inward sweep is
+        // needed; independently pulling the wrist inward drove it into the
+        // tunic and twisted the hand frame as the elbow passed through 90°.
+        const Vec3 wanted = forward - out * (0.08f * arm_run * arm_weight);
+        const Vec3 bend = normalize(wanted - upper * dot(wanted, upper));
+        const Vec3 hinge = normalize(cross(upper, bend));
+        const Vec3 fore = upper * std::cos(flex) + bend * std::sin(flex);
+        const f32 wrist_flex = arm_weight * lerp(rad(2.0f), rad(5.0f), arm_run);
+        const Vec3 hand = upper * std::cos(flex + wrist_flex) + bend * std::sin(flex + wrist_flex);
+        const Vec3 thumbward = normalize(cross(hinge, hand));
+        const Vec3 palmward = normalize(cross(hand, thumbward)) * -sign;
+        const f32 grip = rig.arm_grip;
 
         s.shoulder[i] = C.at(sign * kShoulderWidth * bw, 0.0f, 0.175f + still * 0.004f * rig.breath);
         s.elbow[i] = s.shoulder[i] + upper * kUpperArmLength;
         s.wrist[i] = s.elbow[i] + fore * kForearmLength;
-        s.fingertip[i] = s.wrist[i] + hand * 0.095f;
+        const Vec3 knuckles = s.wrist[i] + hand * lerp(0.052f, 0.045f, grip);
+        s.fingertip[i] = knuckles + hand * lerp(0.035f, 0.012f, grip) + palmward * lerp(0.010f, 0.028f, grip);
+        const Vec3 thumb = s.wrist[i] + hand * 0.022f + thumbward * 0.023f;
+        s.thumb[i] = thumb + hand * lerp(0.030f, 0.016f, grip) + palmward * 0.011f;
         rig.fore_dir[i] = fore;
         rig.hand_dir[i] = hand;
-        rig.arm_forward[i] = normalize(forward - hand * dot(forward, hand));
+        rig.thumb_dir[i] = thumbward;
     }
 
-    // Loose things lag behind a change of pace and bounce with each step.
-    rig.swing = {clamp(-m.lag.x * 0.0035f, -0.05f, 0.05f), clamp(-m.lag.y * 0.0035f, -0.05f, 0.05f),
-                 w * lerp(0.004f, 0.012f, run) * std::sin(2.0f * kTau * (mid - 0.08f))};
     return rig;
 }
 
@@ -500,14 +524,15 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
         paint.cone(elbow, wrist, 0.046f * bw, 0.035f * bw, look.tunic, Mat::Cloth, sleeve);
         paint.band(elbow, wrist, 0.046f * bw, 0.035f * bw, 0.80f, 1.0f, 0.004f, look.linen, Mat::Cloth, kTrim);
 
-        const Vec3 along = rig.hand_dir[i], thumbward = rig.arm_forward[i];
-        const Vec3 knuckles = wrist + along * 0.058f;
-        // Fingers curl towards the palm.
-        const Vec3 curl = normalize(along + thumbward * 0.45f);
+        const Vec3 along = rig.hand_dir[i], thumbward = rig.thumb_dir[i];
+        const f32 grip = rig.arm_grip;
+        const Vec3 knuckles = wrist + along * lerp(0.052f, 0.045f, grip);
+        // Relaxed fingers become a loose fist at a run, curling towards the
+        // palm rather than lengthening forward with the forearm swing.
         paint.cone(wrist, knuckles, 0.027f, 0.032f, look.skin, Mat::Skin, hand);
-        paint.cone(knuckles, knuckles + curl * 0.040f, 0.030f, 0.021f, look.skin, Mat::Skin, hand);
-        const Vec3 thumb = wrist + along * 0.022f + thumbward * 0.024f;
-        paint.cone(thumb, thumb + along * 0.036f + thumbward * 0.014f, 0.013f, 0.010f, look.skin, Mat::Skin, hand);
+        paint.cone(knuckles, s.fingertip[i], 0.030f, lerp(0.021f, 0.024f, grip), look.skin, Mat::Skin, hand);
+        const Vec3 thumb = wrist + along * 0.022f + thumbward * 0.023f;
+        paint.cone(thumb, s.thumb[i], 0.013f, 0.010f, look.skin, Mat::Skin, hand);
     }
 
     // --- head and neck
@@ -619,7 +644,7 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
         paint.cone(at + W.r * 0.022f, at + W.r * 0.030f - W.u * 0.085f + sway * 0.4f, 0.012f, 0.010f, strap, Mat::Leather, kBelt);
 
         // A purse on the right hip.
-        const Vec3 hip = surface_point(trunk, trunk_count, W.at(0.0f, 0.0f, -0.050f), normalize(W.r * 0.80f + W.f * 0.60f), 0.022f);
+        const Vec3 hip = surface_point(trunk, trunk_count, W.at(0.0f, 0.0f, -0.050f), normalize(W.r * 0.50f + W.f * 0.866f), 0.022f);
         const Vec3 purse = hip - W.u * 0.060f + sway * 0.5f + Vec3{0, 0, swing.z};
         paint.cone(hip - W.u * 0.012f, purse, 0.030f, 0.042f, look.leather, Mat::Leather, kPouch);
         paint.band(hip - W.u * 0.012f, purse, 0.030f, 0.042f, -0.3f, 0.35f, 0.004f, strap, Mat::Leather, kPouch);
@@ -649,7 +674,9 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
         paint.cone(rear[0], rear[1], r, r, strap, Mat::Leather, kStrap);
         paint.cone(rear[1], rear[2], r, r, strap, Mat::Leather, kStrap);
 
-        const Vec3 top = lerp(front[2], rear[2], 0.5f) - W.r * 0.030f - W.u * 0.020f;
+        const Vec3 top = lerp(front[2], rear[2], 0.5f) - W.r * 0.030f - W.u * 0.020f - W.f * 0.190f;
+        paint.cone(front[2], top, r, r, strap, Mat::Leather, kStrap);
+        paint.cone(rear[2], top, r, r, strap, Mat::Leather, kStrap);
         const Vec3 bottom = top - W.u * 0.150f - W.r * 0.012f + sway + Vec3{0, 0, swing.z};
         paint.cone(top, bottom, 0.060f, 0.070f, look.leather, Mat::Leather, kSatchel, 0, 0.88f);
         paint.band(top, bottom, 0.060f, 0.070f, -0.25f, 0.42f, 0.005f, toned(look.leather, 0.82f), Mat::Leather, kSatchel);

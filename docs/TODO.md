@@ -97,6 +97,26 @@ in `docs/character.md`.
       culling, atlas reuse, framebuffer/viewport restoration and the far marker
       with the OpenGL render checks.
 
+### Debug recordings
+
+- [x] Add an offline player demo capture using actual controller input,
+      fixed 60 Hz simulation, camera follow and normal scene rendering.
+- [x] Encode captioned, looping GIFs with a shared palette and accurate delays;
+      expose style, look, hood, size, zoom, frame rate and duration controls.
+- [x] Save a frame-by-frame state log and optional source PNGs. Add encoder
+      checks and record a short walking/turning/jogging/sprinting preview.
+
+### Arm and transition review
+
+- [x] Replace the independently pulled forearms with a stable elbow hinge,
+      neutral wrists, continuous thumb frames and relaxed/closed hand poses.
+- [x] Reduce walking overreach, move hip gear out of the hand paths and leave
+      room for the carrying bag's swing. Check torso and gear clearance across
+      gaits, builds and live acceleration/collision transitions.
+- [x] Ease torso/arm blends separately from foot travel, bound turning speed
+      and visual collision impulses. Verify joint continuity and settling.
+- [x] Re-record the demo and add an optional joint overlay for frame reviews.
+
 ## Game (not started)
 
 - [ ] Buildings, units, the horde and combat. Their art is out of scope until

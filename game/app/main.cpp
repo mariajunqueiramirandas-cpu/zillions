@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -33,6 +36,9 @@ struct Options {
     const char* assets = nullptr;      // directory holding the painted art; null = look for it
     const char* screenshot = nullptr;  // render one frame to this PNG and exit
     bool bench = false;                // time the renderer off-screen and exit
+    const char* record_demo = nullptr; // write deterministic demo PNGs + a state manifest
+    f64 demo_seconds = 8.0;
+    i32 demo_fps = 20;
     f32 zoom = 0.0f;                   // pixels per tile; 0 = default for the view
     bool whole_map = false;
     bool have_center = false;
@@ -68,6 +74,9 @@ void usage() {
         "  --assets DIR         painted art directory (default: ./assets, then source tree)\n"
         "  --screenshot FILE    render one frame to a PNG and exit\n"
         "  --bench              time the renderer off-screen and exit\n"
+        "  --record-demo DIR    record the player demo as PNGs + frames.json and exit\n"
+        "  --demo-seconds N     demo length, 0.1..30 seconds (default 8)\n"
+        "  --demo-fps N         demo frame rate, 1..60 (default 20)\n"
         "  --whole-map          frame the entire map (default: the start area)\n"
         "  --center X Y         centre the view on a tile\n"
         "  --zoom PIXELS        pixels per tile\n"
@@ -108,6 +117,12 @@ bool parse(int argc, char** argv, Options& o) {
         }
         else if (is("--screenshot")) o.screenshot = next();
         else if (is("--bench")) o.bench = true;
+        else if (is("--record-demo")) {
+            if (i + 1 >= argc || argv[i + 1][0] == '\0' || std::strncmp(argv[i + 1], "--", 2) == 0) { usage(); return false; }
+            o.record_demo = argv[++i];
+        }
+        else if (is("--demo-seconds")) o.demo_seconds = std::atof(next());
+        else if (is("--demo-fps")) o.demo_fps = std::atoi(next());
         else if (is("--whole-map")) o.whole_map = true;
         else if (is("--zoom")) o.zoom = static_cast<f32>(std::atof(next()));
         else if (is("--time")) o.time = static_cast<f32>(std::atof(next()));
@@ -150,6 +165,12 @@ bool parse(int argc, char** argv, Options& o) {
     }
     const i32 res = o.map.resolution;
     if ((res != 1 && res != 2 && res != 4) || o.map.size < 64 * res || o.map.size > 4096 || o.width <= 0 || o.height <= 0) {
+        usage();
+        return false;
+    }
+    if (o.record_demo && (!o.character || o.screenshot || o.character_sheet || o.bench ||
+        !std::isfinite(o.demo_seconds) || o.demo_seconds < 0.1 || o.demo_seconds > 30.0 ||
+        o.demo_fps < 1 || o.demo_fps > 60 || o.width > 2048 || o.height > 2048)) {
         usage();
         return false;
     }
@@ -232,6 +253,113 @@ bool save_screenshot(Scene& scene, const Camera2D& camera, const MapDrawOptions&
     const bool ok = write_png(path, image);
     ZL_LOG("%s %s (%dx%d)", ok ? "wrote" : "could not write", path, image.width, image.height);
     return ok;
+}
+
+struct DemoStage {
+    f32 end;
+    const char* label;
+    PlayerInput input;
+};
+
+const DemoStage& demo_stage(f32 progress) {
+    static constexpr DemoStage stages[] = {
+        {0.08f, "Idle", {}},
+        {0.34f, "Walk - profile", {{1, 0}, false, true}},
+        {0.56f, "Walk - turn towards camera", {{0, 1}, false, true}},
+        {0.76f, "Jog - turn left", {{-1, 0}, false, false}},
+        {0.90f, "Sprint - turn away", {{0, -1}, true, false}},
+        {1.01f, "Stop and settle", {}},
+    };
+    for (const DemoStage& stage : stages) if (progress < stage.end) return stage;
+    return stages[5];
+}
+
+// Offline time is independent of GPU speed. Simulate at the same 60 Hz as
+// live play, then interpolate at the requested recording rate. Record normal
+// Player inputs so collision, acceleration, turning and gait remain real.
+bool record_player_demo(Scene& scene, const TileMap& map, Player& player, Camera2D camera, MapDrawOptions draw, const Options& options) {
+    const std::filesystem::path directory(options.record_demo);
+    std::error_code error;
+    if (std::filesystem::exists(directory, error) && (!std::filesystem::is_directory(directory, error) || !std::filesystem::is_empty(directory, error))) {
+        ZL_LOG("recording directory must be new or empty: %s", options.record_demo);
+        return false;
+    }
+    std::filesystem::create_directories(directory, error);
+    if (error) { ZL_LOG("cannot create recording directory: %s", error.message().c_str()); return false; }
+    std::ofstream manifest(directory / "frames.json");
+    if (!manifest) { ZL_LOG("cannot write demo manifest"); return false; }
+    const i32 frames = static_cast<i32>(std::ceil(options.demo_seconds * options.demo_fps - 1.0e-9));
+    const bool follow = !options.have_center && !options.whole_map;
+    if (follow) camera.center = player.position() - Vec2{0, 0.5f};
+    if (options.zoom <= 0 && !options.whole_map) camera.zoom = 128;
+    manifest << std::setprecision(9) << "{\"fps\":" << options.demo_fps << ",\"seconds\":" << options.demo_seconds
+             << ",\"width\":" << options.width << ",\"height\":" << options.height << ",\"seed\":" << map.seed
+             << ",\"map_size\":" << map.width << ",\"resolution\":" << map.resolution << ",\"zoom\":" << camera.zoom
+             << ",\"look\":" << options.look_seed << ",\"hood\":" << (player.look.hood_up ? "true" : "false") << ",\"simulation_hz\":60"
+             << ",\"style\":\"" << (scene.figures.style() == FigureStyle::Painted ? "painted" : "smooth") << "\",\"frames\":[\n";
+    Vec2 previous_camera = camera.center;
+    RenderTarget target;
+    target.create(options.width, options.height);
+    Figure figure;
+    i32 tick = 0;
+    constexpr f32 dt = 1.0f / 60.0f;
+    for (i32 frame = 0; frame < frames; ++frame) {
+        const i32 whole = frame * 60 / options.demo_fps;
+        const f32 alpha = static_cast<f32>(frame * 60 % options.demo_fps) / static_cast<f32>(options.demo_fps);
+        while (tick <= whole) {
+            previous_camera = camera.center;
+            const f32 time = static_cast<f32>(tick) / 60.0f;
+            player.step(map, demo_stage(static_cast<f32>(time / options.demo_seconds)).input, dt);
+            if (follow) camera.center += (player.position() - Vec2{0, 0.5f} - camera.center) * (1.0f - std::exp(-dt * 9.0f));
+            ++tick;
+        }
+        Camera2D view = camera;
+        view.center = lerp(previous_camera, camera.center, alpha);
+        const f32 time = static_cast<f32>(frame) / static_cast<f32>(options.demo_fps);
+        draw.time = options.time + time;
+        const HumanMotion motion = player.motion_at(alpha);
+        const Vec2 position = player.position_at(alpha);
+        build_human(player.look, motion, figure);
+        target.bind();
+        scene.draw(view, draw, &figure, position);
+        char filename[32];
+        std::snprintf(filename, sizeof(filename), "frame_%05d.png", frame);
+        const std::string path = (directory / filename).string();
+        if (!write_png(path.c_str(), target.read_pixels())) { ZL_LOG("cannot write %s", path.c_str()); return false; }
+        manifest << (frame ? ",\n" : "") << "{\"file\":\"" << filename << "\",\"time\":" << time
+                 << ",\"stage\":\"" << demo_stage(static_cast<f32>(time / options.demo_seconds)).label << "\",\"x\":" << position.x
+                 << ",\"y\":" << position.y << ",\"speed\":" << motion.speed << ",\"heading\":" << motion.heading
+                 << ",\"phase\":" << motion.phase << ",\"body_activity\":" << motion.body_activity
+                 << ",\"body_run\":" << motion.body_run << ",\"rig\":{";
+        const HumanSkeleton rig = pose_human(player.look, motion);
+        const f32 scale = kTilesPerMetre * player.look.height;
+        const Vec2 forward{std::cos(motion.heading), std::sin(motion.heading)}, right{-forward.y, forward.x};
+        const auto bones = [&](const char* name, std::initializer_list<Vec3> joints, bool first = false) {
+            manifest << (first ? "" : ",") << "\"" << name << "\":[";
+            bool first_joint = true;
+            for (Vec3 joint : joints) {
+                const Vec3 world{(right.x * joint.x + forward.x * joint.y) * scale,
+                                 (right.y * joint.x + forward.y * joint.y) * scale, joint.z * scale};
+                const Vec2 screen = view.world_to_screen(position + figure_to_screen(world) + Vec2{0, figure.waterline * kFigureUpScale});
+                manifest << (first_joint ? "" : ",") << "[" << screen.x << "," << screen.y << "]";
+                first_joint = false;
+            }
+            manifest << "]";
+        };
+        bones("spine", {rig.pelvis, rig.waist, rig.chest, rig.neck, rig.head}, true);
+        for (int i = 0; i < 2; ++i) {
+            bones(i == 0 ? "left_arm" : "right_arm", {rig.shoulder[i], rig.elbow[i], rig.wrist[i], rig.fingertip[i]});
+            bones(i == 0 ? "left_thumb" : "right_thumb", {rig.wrist[i], rig.thumb[i]});
+            bones(i == 0 ? "left_leg" : "right_leg", {rig.hip[i], rig.knee[i], rig.ankle[i], rig.heel[i], rig.ball[i], rig.toe[i]});
+        }
+        manifest << "}}";
+        if (frame % options.demo_fps == 0) ZL_LOG("recording demo: %d/%d frames", frame + 1, frames);
+    }
+    manifest << "\n]}\n";
+    manifest.close();
+    if (!manifest) { ZL_LOG("could not finish demo manifest"); return false; }
+    ZL_LOG("recorded %d frames to %s", frames, options.record_demo);
+    return true;
 }
 
 // The character from every side and through its strides, on the ground of the
@@ -424,7 +552,7 @@ int main(int argc, char** argv) {
     WindowConfig config;
     config.width = options.width;
     config.height = options.height;
-    config.visible = options.screenshot == nullptr && options.character_sheet == nullptr && !options.bench;
+    config.visible = options.screenshot == nullptr && options.character_sheet == nullptr && !options.bench && options.record_demo == nullptr;
     config.vsync = options.vsync;
     Window window(config);
 
@@ -488,6 +616,8 @@ int main(int argc, char** argv) {
     draw.time = options.time;
     draw.overlay = options.overlay;
     draw.grid = options.grid;
+
+    if (options.record_demo) return record_player_demo(scene, map, player, camera, draw, options) ? 0 : 1;
 
     if (options.bench) {
         std::printf("renderer, %dx%d, 2 draw calls per frame\n", options.width, options.height);
