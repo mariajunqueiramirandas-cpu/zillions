@@ -1,5 +1,6 @@
 // Headless test suite. A deliberately tiny harness: TEST registers a function,
 // CHECK records a failure and carries on, main runs everything.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "actor/player.h"
 #include "core/clock.h"
 #include "core/image.h"
 #include "core/jobs.h"
@@ -135,6 +137,354 @@ TEST(camera_round_trips_and_zooms_about_a_point) {
     camera.zoom_at(anchor, 1.7f, 1.0f, 128.0f);
     const Vec2 after = camera.screen_to_world(anchor);
     CHECK(std::fabs(before.x - after.x) < 1.0e-2f && std::fabs(before.y - after.y) < 1.0e-2f);
+}
+
+// --- character ---------------------------------------------------------------
+
+bool near(Vec3 a, Vec3 b, f32 epsilon = 2.0e-5f) { return length(a - b) < epsilon; }
+bool finite(Vec3 p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); }
+
+std::vector<Vec3> joints(const HumanSkeleton& s) {
+    std::vector<Vec3> result{s.pelvis, s.waist, s.chest, s.neck, s.head};
+    for (int i = 0; i < 2; ++i) {
+        for (Vec3 p : {s.hip[i], s.knee[i], s.ankle[i], s.heel[i], s.ball[i], s.toe[i],
+                       s.shoulder[i], s.elbow[i], s.wrist[i], s.fingertip[i], s.thumb[i]}) result.push_back(p);
+    }
+    return result;
+}
+
+bool same_figure(const Figure& a, const Figure& b) {
+    if (a.parts.size() != b.parts.size() || a.waterline != b.waterline) return false;
+    for (size_t i = 0; i < a.parts.size(); ++i) {
+        const auto &x = a.parts[i], &y = b.parts[i];
+        if (!near(x.a, y.a) || !near(x.b, y.b) || x.ra != y.ra || x.rb != y.rb ||
+            x.color.r != y.color.r || x.color.g != y.color.g || x.color.b != y.color.b ||
+            x.color.a != y.color.a || x.material != y.material || x.flags != y.flags ||
+            x.group != y.group || x.roundness != y.roundness) return false;
+    }
+    return true;
+}
+
+struct HandClearance { f32 distance = 1.0e9f; int group = 0; };
+
+HandClearance hand_gear_clearance(const HumanLook& look, const HumanMotion& motion, const HumanSkeleton& skeleton) {
+    Figure figure;
+    build_human(look, motion, figure);
+    const f32 scale = kTilesPerMetre * look.height;
+    const auto in_figure = [&](Vec3 p) {
+        const Vec2 front{std::cos(motion.heading), std::sin(motion.heading)}, side{-front.y, front.x};
+        return Vec3{side.x * p.x + front.x * p.y, side.y * p.x + front.y * p.y, p.z} * scale;
+    };
+    HandClearance closest;
+    for (int i = 0; i < 2; ++i) {
+        const Vec3 points[] = {skeleton.wrist[i], skeleton.fingertip[i], skeleton.thumb[i]};
+        const f32 radii[] = {0.032f, 0.024f, 0.010f};
+        for (int j = 0; j < 3; ++j) {
+            for (const FigurePart& part : figure.parts) {
+                if ((part.material != FigureMaterial::Leather && part.material != FigureMaterial::Metal) || (part.flags & FigurePartFlag::FlatCaps)) continue;
+                const f32 distance = round_cone_distance(in_figure(points[j]), part.a, part.b, part.ra, part.rb) / scale - radii[j];
+                if (distance < closest.distance) closest = {distance, part.group};
+            }
+        }
+    }
+    return closest;
+}
+
+TEST(human_rig_keeps_bones_soles_and_parts_valid) {
+    bool bones = true, soles = true, values = true, capacity = true, bounds = true;
+    for (u64 seed = 0; seed < 24; ++seed) {
+        HumanLook look = seed == 0 ? hero_look() : random_look(seed);
+        look.beard = true; // Exercise the largest combinations too.
+        for (f32 speed : {0.0f, 0.2f, 0.6f, kWalkSpeed, 2.4f, kJogSpeed, kSprintSpeed, 6.7f}) {
+            for (int phase = 0; phase <= 64; ++phase) {
+                HumanMotion m;
+                m.speed = speed;
+                m.phase = static_cast<f32>(phase) / 64.0f;
+                m.heading = static_cast<f32>(seed) * 0.7f;
+                m.time = 1.4f;
+                m.turn = phase % 2 ? -2.0f : 2.0f;
+                m.lag = {2.0f, -3.0f};
+                const HumanSkeleton s = pose_human(look, m);
+                for (Vec3 p : joints(s)) values &= finite(p);
+                for (int i = 0; i < 2; ++i) {
+                    bones &= std::fabs(length(s.knee[i] - s.hip[i]) - kThighLength) < 2.0e-5f;
+                    bones &= std::fabs(length(s.ankle[i] - s.knee[i]) - kShinLength) < 2.0e-5f;
+                    bones &= std::fabs(length(s.elbow[i] - s.shoulder[i]) - kUpperArmLength) < 2.0e-5f;
+                    bones &= std::fabs(length(s.wrist[i] - s.elbow[i]) - kForearmLength) < 2.0e-5f;
+                    soles &= std::min({s.heel[i].z, s.ball[i].z, s.toe[i].z}) >= -2.0e-5f;
+                }
+                Figure f;
+                build_human(look, m, f);
+                capacity &= !f.parts.empty() && f.parts.size() < static_cast<size_t>(kMaxFigureParts);
+                Vec2 lo, hi;
+                bounds &= figure_screen_bounds(f, lo, hi);
+                for (const FigurePart& p : f.parts) {
+                    values &= finite(p.a) && finite(p.b) && std::isfinite(p.ra) && std::isfinite(p.rb) &&
+                              p.ra > 0.0f && p.rb > 0.0f && std::isfinite(p.roundness);
+                    for (Vec3 end : {p.a, p.b}) {
+                        const Vec2 screen = figure_to_screen(end);
+                        bounds &= screen.x >= lo.x && screen.x <= hi.x && screen.y >= lo.y && screen.y <= hi.y;
+                    }
+                }
+            }
+        }
+    }
+    CHECK(bones); CHECK(soles); CHECK(values); CHECK(capacity); CHECK(bounds);
+}
+
+TEST(human_pose_wraps_and_planted_feet_hold_the_ground) {
+    const HumanLook look = hero_look();
+    for (f32 speed : {0.0f, 0.6f, kWalkSpeed, 2.4f, kJogSpeed, kSprintSpeed}) {
+        HumanMotion a;
+        a.speed = speed;
+        a.time = 1.0f;
+        HumanMotion b = a;
+        b.phase = 1.0f;
+        const auto ja = joints(pose_human(look, a)), jb = joints(pose_human(look, b));
+        for (size_t i = 0; i < ja.size(); ++i) CHECK(near(ja[i], jb[i]));
+        const HumanGait gait = human_gait(speed);
+        if (speed == 0.0f) continue;
+        // Between heel roll and toe-off the whole sole stays flat.
+        for (int leg = 0; leg < 2; ++leg) {
+            a.phase = gait.duty * 0.23f + static_cast<f32>(leg) * 0.5f;
+            b.phase = gait.duty * 0.32f + static_cast<f32>(leg) * 0.5f;
+            const auto sa = pose_human(look, a), sb = pose_human(look, b);
+            CHECK(sa.planted[leg] && sb.planted[leg]);
+            const Vec3 travel{0.0f, (b.phase - a.phase) * gait.cycle, 0.0f};
+            CHECK(near(sa.heel[leg], sb.heel[leg] + travel));
+            CHECK(near(sa.ball[leg], sb.ball[leg] + travel));
+            CHECK(near(sa.toe[leg], sb.toe[leg] + travel));
+        }
+    }
+}
+
+TEST(human_arms_keep_natural_bends_and_clear_the_gear) {
+    bool bends = true, reach = true, continuous = true, clear = true, torso_clear = true;
+    f32 minimum_clearance = 1.0e9f;
+    f32 worst_speed = 0, worst_build = 0, worst_phase = 0;
+    int worst_group = 0;
+    for (f32 build : {0.90f, 1.0f, 1.12f}) {
+        for (bool satchel : {false, true}) {
+            HumanLook look = hero_look();
+            look.build = build;
+            look.height = build < 1.0f ? 0.93f : 1.06f;
+            look.satchel = satchel;
+            for (f32 speed : {0.0f, 0.6f, kWalkSpeed, 2.4f, kJogSpeed, kSprintSpeed, 6.7f}) {
+                HumanSkeleton previous;
+                f32 counter_swing = 0;
+                for (int phase = 0; phase <= 128; ++phase) {
+                    HumanMotion motion;
+                    motion.speed = speed;
+                    motion.phase = static_cast<f32>(phase) / 128.0f;
+                    motion.time = 0.9f;
+                    motion.turn = 1.5f;
+                    motion.lag = {2, -3};
+                    const HumanSkeleton s = pose_human(look, motion);
+                    const Vec3 right = normalize(s.shoulder[1] - s.shoulder[0]);
+                    const Vec3 up = normalize(s.neck - s.chest);
+                    const Vec3 forward = normalize(cross(up, right));
+                    for (int i = 0; i < 2; ++i) {
+                        const Vec3 upper = normalize(s.elbow[i] - s.shoulder[i]), fore = normalize(s.wrist[i] - s.elbow[i]);
+                        const f32 angle = std::acos(clamp(dot(upper, fore), -1.0f, 1.0f)) * 180.0f / kPi;
+                        bends &= angle >= 5.0f && angle <= 110.0f;
+                        if (speed == kWalkSpeed) {
+                            bends &= angle <= 30.0f;
+                            reach &= dot(s.fingertip[i] - s.shoulder[i], forward) < 0.30f;
+                        }
+                        if (speed >= kJogSpeed) bends &= angle >= 70.0f;
+                        if (phase) {
+                            continuous &= length(s.thumb[i] - previous.thumb[i]) < 0.035f;
+                            continuous &= length(s.wrist[i] - previous.wrist[i]) < 0.035f;
+                        }
+                    }
+                    counter_swing += (s.wrist[0].y - s.wrist[1].y) * (s.ankle[0].y - s.ankle[1].y);
+                    previous = s;
+                    const HandClearance gear = hand_gear_clearance(look, motion, s);
+                    if (gear.distance < minimum_clearance) {
+                        minimum_clearance = gear.distance;
+                        worst_speed = speed; worst_build = build; worst_phase = motion.phase; worst_group = gear.group;
+                    }
+                    clear &= gear.distance > -0.002f;
+                    for (int i = 0; i < 2; ++i) {
+                        const Vec3 points[] = {s.wrist[i], s.fingertip[i], s.thumb[i]};
+                        const f32 radii[] = {0.032f, 0.024f, 0.010f};
+                        for (int j = 0; j < 3; ++j) {
+                            // An independent torso envelope, derived from the
+                            // spine and shoulder axes rather than skin parts.
+                            const Vec3 spine = s.chest - s.pelvis;
+                            const f32 along = dot(points[j] - s.pelvis, spine) / dot(spine, spine);
+                            if (along >= 0 && along <= 1) {
+                                const Vec3 offset = points[j] - lerp(s.pelvis, s.chest, along);
+                                const f32 x = dot(offset, right) / (0.16f * build + radii[j]);
+                                const f32 y = dot(offset, forward) / (0.10f * build + radii[j]);
+                                torso_clear &= x * x + y * y >= 1.0f;
+                            }
+                        }
+                    }
+                }
+                if (speed >= 0.6f) CHECK(counter_swing < 0.0f);
+            }
+        }
+    }
+    if (!clear) std::printf("    hand/gear clearance %.6f metres (speed %.2f, build %.2f, phase %.3f, group %d)\n", minimum_clearance, worst_speed, worst_build, worst_phase, worst_group);
+    CHECK(bends); CHECK(reach); CHECK(continuous); CHECK(clear); CHECK(torso_clear);
+}
+
+TEST(human_looks_are_repeatable_and_varied) {
+    Figure a, b, other;
+    HumanMotion m;
+    for (u64 seed = 1; seed <= 128; ++seed) {
+        build_human(random_look(seed), m, a);
+        build_human(random_look(seed), m, b);
+        build_human(random_look(seed + 1), m, other);
+        CHECK(same_figure(a, b));
+        CHECK(!same_figure(a, other));
+    }
+}
+
+TEST(figure_distances_and_empty_bounds) {
+    const Vec3 a{0, 0, 0}, b{0, 0, 2};
+    CHECK(std::fabs(round_cone_distance({1, 0, 1}, a, b, 0.5f, 0.5f) - 0.5f) < 1.0e-6f);
+    CHECK(std::fabs(round_cone_distance({0, 0, 3}, a, b, 0.5f, 0.5f) - 0.5f) < 1.0e-6f);
+    CHECK(std::fabs(round_cone_distance({0, 0, 0}, a, a, 0.5f, 0.2f) + 0.5f) < 1.0e-6f);
+    Vec2 lo, hi;
+    CHECK(!figure_screen_bounds(Figure{}, lo, hi));
+}
+
+TileMap actor_map(Terrain terrain = Terrain::Grass) {
+    TileMap map;
+    map.width = map.height = 32;
+    map.start = {4, 4};
+    map.terrain.assign(1024, terrain);
+    map.flags.assign(1024, TileFlag::Walkable);
+    map.level.assign(1024, 0);
+    return map;
+}
+
+void walk_steps(Player& player, const TileMap& map, Vec2 direction, int count, bool sprint = false) {
+    for (int i = 0; i < count; ++i) player.step(map, {direction, sprint, false}, 1.0f / 60.0f);
+}
+
+TEST(player_blocks_obstacles_and_cliffs_but_crosses_ramps) {
+    for (Terrain barrier : {Terrain::Water, Terrain::Forest, Terrain::Mountain, Terrain::Rocks}) {
+        TileMap map = actor_map();
+        for (int y = 0; y < map.height; ++y) {
+            const size_t i = static_cast<size_t>(map.index(8, y));
+            map.terrain[i] = barrier;
+            map.flags[i] = 0;
+        }
+        Player p;
+        CHECK(p.spawn(map));
+        walk_steps(p, map, {1, 0}, 240, true);
+        CHECK(p.position().x <= 8.0f - Player::kRadius + 1.0e-5f);
+        CHECK(p.motion().speed < 0.01f);
+        const f32 y = p.position().y;
+        walk_steps(p, map, {1, 1}, 120);
+        CHECK(p.position().y > y + 2.0f); // Slides along the wall.
+        CHECK(can_stand(map, p.position(), Player::kRadius));
+    }
+    TileMap map = actor_map();
+    for (int y = 0; y < map.height; ++y)
+        for (int x = 8; x < map.width; ++x) map.level[static_cast<size_t>(map.index(x, y))] = 1;
+    Player p;
+    CHECK(p.spawn(map));
+    walk_steps(p, map, {1, 0}, 240, true);
+    CHECK(p.position().x < 8.0f);
+    map.flags[static_cast<size_t>(map.index(8, 4))] |= TileFlag::Ramp;
+    walk_steps(p, map, {1, 0}, 120);
+    CHECK(p.position().x > 10.0f);
+}
+
+TEST(player_fords_slow_movement_and_replays_match) {
+    const TileMap dry = actor_map(), wet = actor_map(Terrain::Shallows);
+    Player a, b, w;
+    CHECK(a.spawn(dry)); CHECK(b.spawn(dry)); CHECK(w.spawn(wet));
+    CHECK(w.motion().wade == kWadeDepth); // Posed screenshots start submerged too.
+    for (int i = 0; i < 360; ++i) {
+        const PlayerInput input{{i < 180 ? 1.0f : 0.0f, i < 180 ? 0.0f : 1.0f}, true, false};
+        a.step(dry, input, 1.0f / 60.0f);
+        b.step(dry, input, 1.0f / 60.0f);
+        w.step(wet, input, 1.0f / 60.0f);
+        CHECK(a.position().x == b.position().x && a.position().y == b.position().y);
+        CHECK(a.motion().phase == b.motion().phase && a.motion().heading == b.motion().heading);
+        CHECK(a.motion().body_activity == b.motion().body_activity && a.motion().body_run == b.motion().body_run);
+    }
+    CHECK(length(w.position() - Vec2{4.5f, 4.5f}) < length(a.position() - Vec2{4.5f, 4.5f}) * 0.5f);
+    CHECK(std::fabs(w.motion().wade - kWadeDepth) < 1.0e-4f);
+    CHECK(std::fabs(length(w.velocity()) / length(a.velocity()) - kJogSpeed * kWadeSlowdown / kSprintSpeed) < 0.01f);
+}
+
+TEST(player_arm_transitions_settle_without_snaps) {
+    const TileMap map = actor_map();
+    Player player;
+    CHECK(player.spawn(map));
+    HumanSkeleton previous = pose_human(player.look, player.motion());
+    HumanMotion old = player.motion();
+    f32 max_elbow_change = 0;
+    f32 minimum_gear_clearance = 1.0e9f;
+    for (int frame = 0; frame < 720; ++frame) {
+        PlayerInput input;
+        if (frame < 180) input = {{1, 0}, false, true};
+        else if (frame < 360) input = {{0, 1}, false, false};
+        else if (frame < 540) input = {{-1, 0}, true, false};
+        player.step(map, input, 1.0f / 60.0f);
+        const HumanMotion motion = player.motion();
+        const HumanSkeleton s = pose_human(player.look, motion);
+        minimum_gear_clearance = std::min(minimum_gear_clearance, hand_gear_clearance(player.look, motion, s).distance);
+        CHECK(motion.body_activity >= 0 && motion.body_activity <= 1 && motion.body_run >= 0 && motion.body_run <= 1);
+        CHECK(std::fabs(motion.heading - old.heading) <= 3.0f * kPi / 60.0f + 1.0e-5f);
+        for (int i = 0; i < 2; ++i) {
+            const auto elbow_angle = [i](const HumanSkeleton& pose) {
+                return std::acos(clamp(dot(normalize(pose.elbow[i] - pose.shoulder[i]), normalize(pose.wrist[i] - pose.elbow[i])), -1.0f, 1.0f));
+            };
+            max_elbow_change = std::max(max_elbow_change, std::fabs(elbow_angle(s) - elbow_angle(previous)));
+            if (std::fabs(elbow_angle(s) - elbow_angle(previous)) > 12.0f * kPi / 180.0f)
+                std::printf("    arm jump frame %d speed %.2f activity %.3f run %.3f, elbow %.1f -> %.1f\n", frame, motion.speed, motion.body_activity, motion.body_run, elbow_angle(previous) * 180.0f / kPi, elbow_angle(s) * 180.0f / kPi);
+            CHECK(length(s.wrist[i] - previous.wrist[i]) < 0.10f);
+        }
+        previous = s;
+        old = motion;
+    }
+    CHECK(max_elbow_change < 12.0f * kPi / 180.0f);
+    if (minimum_gear_clearance < -0.002f) std::printf("    moving hand/gear clearance %.6f metres\n", minimum_gear_clearance);
+    CHECK(minimum_gear_clearance > -0.002f);
+    CHECK(player.motion().body_activity < 0.001f && player.motion().body_run < 0.001f);
+    CHECK(player.motion().speed == 0.0f);
+}
+
+TEST(player_edges_corners_and_interpolation_remain_safe) {
+    TileMap map = actor_map();
+    map.flags[static_cast<size_t>(map.index(5, 4))] = 0;
+    CHECK(!can_stand(map, {4.9f, 4.5f}, Player::kRadius));
+    CHECK(!can_stand(map, {0.1f, 0.5f}, Player::kRadius));
+    CHECK(!can_stand(map, {31.9f, 31.5f}, Player::kRadius));
+    // The circle overlaps a diagonally adjacent blocked tile.
+    CHECK(!can_stand(map, {4.9f, 5.1f}, Player::kRadius));
+    Player p;
+    CHECK(p.spawn(map, {5.5f, 4.5f})); // Relocates off the obstacle.
+    CHECK(can_stand(map, p.position(), Player::kRadius));
+    const Vec2 before = p.position();
+    p.step(map, {{1, 0}, false, false}, 0.0f);
+    CHECK(p.position().x == before.x && p.position().y == before.y);
+    CHECK(finite({p.velocity().x, p.velocity().y, p.motion().speed}));
+    CHECK(p.spawn(map, {3.5f, 3.5f})); // An unobstructed lane for phase wrapping.
+    bool wrapped = false;
+    for (int i = 0; i < 240; ++i) {
+        const Vec2 previous = p.position();
+        const HumanMotion old = p.motion();
+        p.step(map, {{0, 1}, false, false}, 1.0f / 60.0f);
+        const Vec2 middle = p.position_at(0.5f);
+        CHECK(length(middle - (previous + p.position()) * 0.5f) < 1.0e-5f);
+        const HumanMotion m = p.motion_at(0.5f);
+        CHECK(m.phase >= 0.0f && m.phase < 1.0f && std::isfinite(m.heading));
+        if (p.motion().phase < old.phase) {
+            wrapped = true;
+            CHECK(std::min(m.phase, 1.0f - m.phase) < 0.04f);
+        }
+    }
+    CHECK(wrapped);
+    map.flags.assign(map.flags.size(), 0);
+    CHECK(!p.spawn(map));
 }
 
 // --- map generation -----------------------------------------------------------

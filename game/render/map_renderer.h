@@ -1,4 +1,4 @@
-// Draws a TileMap: one full-screen shader pass for the ground and one
+// Draws a TileMap: one full-screen shader pass for the ground and an
 // instanced batch for everything standing on it.
 #pragma once
 
@@ -30,6 +30,12 @@ struct MapDrawOptions {
     MapOverlay overlay = MapOverlay::None;
 };
 
+// A box on the map (in tiles) that must stay visible: tall scenery drawn in
+// front of it turns translucent where it would cover it.
+struct SeeThrough {
+    Vec2 lo, hi;
+};
+
 class MapRenderer {
 public:
     MapRenderer() = default;
@@ -44,7 +50,15 @@ public:
     // keeps its UVs and the map/camera need not be rebuilt when art changes.
     void reload_art(JobSystem& jobs, const char* asset_dir);
     void set_map(const TileMap& map, JobSystem& jobs);
+    // Ground and all scenery: two draw calls.
     void draw(const Camera2D& camera, const MapDrawOptions& options);
+
+    // The same in pieces, for drawing other things among the scenery. Scenery
+    // is drawn north to south so that nearer things overlap further ones;
+    // draw_scenery() draws what stands at y_begin <= y < y_end, so anything
+    // drawn between two calls sits at that depth in the scene.
+    void draw_ground(const Camera2D& camera, const MapDrawOptions& options);
+    void draw_scenery(const Camera2D& camera, f32 y_begin, f32 y_end, const SeeThrough* reveal = nullptr);
 
     // The sprite atlas and its catalogue, for anything else that draws sprites.
     const Texture& sprite_atlas() const { return sprites_; }
@@ -73,6 +87,7 @@ private:
     // Static scenery, sorted north to south so later sprites overlap earlier
     // ones. row_start_[y] is the first sprite standing on tile row y.
     std::vector<SpriteInstance> decor_;
+    std::vector<f32> decor_y_;  // where each stands on the ground, ascending
     std::vector<u32> row_start_;
     i32 map_width_ = 0, map_height_ = 0;
     u32 sprites_drawn_ = 0;

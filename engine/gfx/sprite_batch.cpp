@@ -86,6 +86,10 @@ SpriteInstance* SpriteBatch::begin(u32 capacity) {
 }
 
 void SpriteBatch::draw(u32 count, const Camera2D& camera, const Texture& atlas) {
+    draw(count, camera, atlas.id());
+}
+
+void SpriteBatch::draw(u32 count, const Camera2D& camera, u32 atlas_texture) {
     ZL_ASSERT(mapped_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     glUnmapBuffer(GL_ARRAY_BUFFER);
@@ -95,7 +99,8 @@ void SpriteBatch::draw(u32 count, const Camera2D& camera, const Texture& atlas) 
     shader_.bind();
     const Vec2 scale = camera.clip_scale(), offset = camera.clip_offset();
     glUniform4f(u_view_, scale.x, scale.y, offset.x, offset.y);
-    atlas.bind(0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, atlas_texture);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

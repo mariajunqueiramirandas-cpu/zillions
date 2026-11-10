@@ -11,6 +11,14 @@ target_link_libraries(zl_world PUBLIC zl_core PRIVATE zl_options)
 add_library(zl_art STATIC render/terrain_art.cpp)
 target_link_libraries(zl_art PUBLIC zl_world PRIVATE zl_options)
 
+# Characters: the figure description, the human rig that builds one in code and
+# the player's controller. CPU only and deterministic, like the world.
+add_library(zl_actor STATIC
+  actor/figure.cpp
+  actor/human.cpp
+  actor/player.cpp)
+target_link_libraries(zl_actor PUBLIC zl_world PRIVATE zl_options)
+
 # Headless map generator: previews, statistics and benchmarks without a GPU.
 add_executable(zl_mapgen ${PROJECT_SOURCE_DIR}/tools/mapgen_cli.cpp)
 target_link_libraries(zl_mapgen PRIVATE zl_world zl_options)
@@ -18,9 +26,10 @@ target_link_libraries(zl_mapgen PRIVATE zl_world zl_options)
 if(ZL_BUILD_APP)
   add_executable(zillions
     app/main.cpp
+    render/figure_renderer.cpp
     render/map_renderer.cpp
     render/relief.cpp)
-  target_link_libraries(zillions PRIVATE zl_art zl_gfx zl_options)
+  target_link_libraries(zillions PRIVATE zl_actor zl_art zl_gfx zl_options)
   # Lets the viewer find the painted art when it is not run from the repository root.
   target_compile_definitions(zillions PRIVATE ZL_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
 endif()
