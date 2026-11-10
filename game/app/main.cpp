@@ -1,18 +1,23 @@
-// Zillions: map viewer. For now the game is the engine plus the map generator;
-// this executable lets you fly over generated maps and capture screenshots.
+// Zillions. For now the game is the engine, the map generator and one
+// character: this executable lets you walk the player's character about a
+// generated map, fly the camera over it and capture screenshots.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
+#include "actor/human.h"
+#include "actor/player.h"
 #include "core/clock.h"
 #include "core/jobs.h"
 #include "core/rng.h"
 #include "gfx/gl.h"
 #include "gfx/render_target.h"
 #include "platform/window.h"
+#include "render/figure_renderer.h"
 #include "render/map_renderer.h"
 #include "world/mapgen.h"
 
@@ -35,7 +40,21 @@ struct Options {
     f32 time = 0.0f;
     MapOverlay overlay = MapOverlay::None;
     bool grid = false;
+
+    bool character = true;                  // put the player's character on the map
+    const char* character_sheet = nullptr;  // render the character's poses to this PNG and exit
+    bool have_player = false;
+    Vec2 player{0, 0};                      // where the character stands, in tiles
+    HumanMotion pose;                       // its pose in a screenshot
+    u64 look_seed = 0;                      // 0: the hero; otherwise a random person
+    bool hood_up = false;
 };
+
+// Pixels per tile the camera starts at when it follows the character, and the
+// closest it will go. The character is drawn in code, so it stays sharp well
+// past the 128 the painted art was made for.
+constexpr f32 kFollowZoom = 64.0f;
+constexpr f32 kMaxZoom = 256.0f;
 
 void usage() {
     std::puts(
@@ -53,9 +72,17 @@ void usage() {
         "  --zoom PIXELS        pixels per tile\n"
         "  --overlay MODE       debug view: height or pass\n"
         "  --grid               draw tile borders\n"
-        "controls: WASD/arrows or right-drag to pan, wheel to zoom, R new map,\n"
-        "          V cycle overlay (height, passability),\n"
-        "          G grid, F whole map, H start area, F2 screenshot, F5 reload art, Esc quit");
+        "  --no-character       the map alone, as a free-flying viewer\n"
+        "  --character-sheet F  render the character's poses to a PNG and exit\n"
+        "  --player X Y         where the character stands (default: the start)\n"
+        "  --heading DEG        screenshots: the way it faces (0 east, 90 towards the viewer)\n"
+        "  --speed M --phase P  screenshots: its speed in m/s and place in the stride, 0..1\n"
+        "  --look N             a different person for every N (default: the hero)\n"
+        "  --hood               hood up\n"
+        "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
+        "          C new look, X hood, 1 the hero's look, Tab free camera (WASD or right-drag to pan),\n"
+        "          R new map, V cycle overlay (height, passability), G grid,\n"
+        "          F whole map, H back to the character, F2 screenshot, F5 reload art, Esc quit");
 }
 
 bool parse(int argc, char** argv, Options& o) {
@@ -90,6 +117,18 @@ bool parse(int argc, char** argv, Options& o) {
                 return false;
             }
         }
+        else if (is("--no-character")) o.character = false;
+        else if (is("--character-sheet")) o.character_sheet = next();
+        else if (is("--player")) {
+            o.player.x = static_cast<f32>(std::atof(next()));
+            o.player.y = static_cast<f32>(std::atof(next()));
+            o.have_player = true;
+        }
+        else if (is("--heading")) o.pose.heading = static_cast<f32>(std::atof(next())) * kPi / 180.0f;
+        else if (is("--speed")) o.pose.speed = static_cast<f32>(std::atof(next()));
+        else if (is("--phase")) o.pose.phase = static_cast<f32>(std::atof(next()));
+        else if (is("--look")) o.look_seed = std::strtoull(next(), nullptr, 10);
+        else if (is("--hood")) o.hood_up = true;
         else if (is("--center")) {
             o.center.x = static_cast<f32>(std::atof(next()));
             o.center.y = static_cast<f32>(std::atof(next()));
@@ -141,14 +180,100 @@ void log_map(const TileMap& map) {
            s.walkable_tiles ? 100.0 * s.reachable_tiles / s.walkable_tiles : 0.0);
 }
 
-bool save_screenshot(MapRenderer& renderer, const Camera2D& camera, const MapDrawOptions& draw, const char* path) {
+HumanLook make_look(u64 seed, bool hood_up) {
+    HumanLook look = seed == 0 ? hero_look() : random_look(seed);
+    if (hood_up) look.hood_up = true;
+    return look;
+}
+
+// The map with one figure standing in it. The scenery is drawn in two halves,
+// north and south of the figure, so that it walks behind what is nearer the
+// viewer and in front of what is further away; tall scenery in front of it
+// turns translucent. Four draw calls, or two without a figure.
+struct Scene {
+    MapRenderer& map;
+    FigureRenderer& figures;
+
+    void draw(const Camera2D& camera, const MapDrawOptions& options, const Figure* figure, Vec2 position) {
+        Vec2 lo, hi;
+        if (!figure || !figure_screen_bounds(*figure, lo, hi)) {
+            map.draw(camera, options);
+            return;
+        }
+        const SeeThrough reveal{position + lo, position + hi};
+        // From far away a ring on the ground says where the character is.
+        const f32 marker = 1.0f - smoothstep(9.0f, 16.0f, camera.zoom);
+        const FigureDraw item{figure, position, options.time, marker};
+        map.draw_ground(camera, options);
+        map.draw_scenery(camera, -1.0e30f, position.y);
+        figures.draw(&item, 1, camera);
+        map.draw_scenery(camera, position.y, 1.0e30f, &reveal);
+    }
+};
+
+bool save_screenshot(Scene& scene, const Camera2D& camera, const MapDrawOptions& draw, const Figure* figure, Vec2 position, const char* path) {
     RenderTarget target;
     target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
     target.bind();
-    renderer.draw(camera, draw);
+    scene.draw(camera, draw, figure, position);
     const Image image = target.read_pixels();
     const bool ok = write_png(path, image);
     ZL_LOG("%s %s (%dx%d)", ok ? "wrote" : "could not write", path, image.width, image.height);
+    return ok;
+}
+
+// The character from every side and through its strides, on the ground of the
+// start area: a row standing, turned through eight headings; walking and
+// running in profile, towards the viewer and away; and a row of other people.
+bool save_character_sheet(Scene& scene, const TileMap& map, const Options& options) {
+    constexpr int kColumns = 8, kRows = 6;
+    constexpr f32 kCellWidth = 1.5f, kCellHeight = 1.9f;
+    const f32 zoom = options.zoom > 0.0f ? options.zoom : 96.0f;
+
+    Camera2D camera;
+    camera.zoom = zoom;
+    camera.viewport = {std::round(kColumns * kCellWidth * zoom), std::round(kRows * kCellHeight * zoom)};
+    camera.center = {static_cast<f32>(map.start.x) + 0.5f, static_cast<f32>(map.start.y) + 0.5f};
+    const Vec2 corner = camera.visible_min();
+
+    const HumanLook hero = make_look(options.look_seed, options.hood_up);
+    std::vector<Figure> figures(static_cast<size_t>(kColumns * kRows));
+    std::vector<FigureDraw> draws;
+    for (int row = 0; row < kRows; ++row) {
+        for (int column = 0; column < kColumns; ++column) {
+            const f32 step = static_cast<f32>(column) / static_cast<f32>(kColumns);
+            HumanLook look = hero;
+            HumanMotion motion;
+            motion.time = options.time + 0.9f + static_cast<f32>(column) * 1.37f;
+            switch (row) {
+                case 0: motion.heading = kPi * 0.5f - step * 2.0f * kPi; break;                       // turning on the spot
+                case 1: motion.heading = 0.0f; motion.speed = kWalkSpeed; motion.phase = step; break;   // walking east
+                case 2: motion.heading = kPi * 0.36f; motion.speed = kWalkSpeed; motion.phase = step; break;  // walking towards the viewer
+                case 3: motion.heading = 0.0f; motion.speed = kJogSpeed; motion.phase = step; break;    // running east
+                case 4: motion.heading = -kPi * 0.68f; motion.speed = kSprintSpeed; motion.phase = step; break;  // sprinting away
+                default:
+                    look = random_look(static_cast<u64>(column) + 1 + options.look_seed * 8);
+                    motion.heading = kPi * (0.5f - 0.16f * static_cast<f32>(column % 3 - 1));
+                    break;
+            }
+            Figure& figure = figures[static_cast<size_t>(row * kColumns + column)];
+            build_human(look, motion, figure);
+            const Vec2 feet{corner.x + (static_cast<f32>(column) + 0.5f) * kCellWidth, corner.y + (static_cast<f32>(row) + 0.80f) * kCellHeight};
+            draws.push_back({&figure, feet, options.time, 0.0f});
+        }
+    }
+
+    RenderTarget target;
+    target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
+    target.bind();
+    MapDrawOptions draw;
+    draw.time = options.time;
+    scene.map.draw_ground(camera, draw);
+    scene.figures.draw(draws.data(), static_cast<u32>(draws.size()), camera);
+    const Image image = target.read_pixels();
+    const bool ok = write_png(options.character_sheet, image);
+    ZL_LOG("%s %s (%dx%d): %d figures, %zu parts each", ok ? "wrote" : "could not write", options.character_sheet, image.width, image.height,
+           kColumns * kRows, figures[0].parts.size());
     return ok;
 }
 
@@ -240,7 +365,7 @@ int main(int argc, char** argv) {
     WindowConfig config;
     config.width = options.width;
     config.height = options.height;
-    config.visible = options.screenshot == nullptr && !options.bench;
+    config.visible = options.screenshot == nullptr && options.character_sheet == nullptr && !options.bench;
     config.vsync = options.vsync;
     Window window(config);
 
@@ -263,10 +388,38 @@ int main(int argc, char** argv) {
     }
     log_map(map);
 
+    FigureRenderer figures;
+    figures.init();
+    Scene scene{renderer, figures};
+    if (options.character_sheet) return save_character_sheet(scene, map, options) ? 0 : 1;
+
+    // The player's character, standing at the colony's start.
+    Player player;
+    player.look = make_look(options.look_seed, options.hood_up);
+    const auto place_player = [&](bool posed) {
+        if (!(options.have_player && posed ? player.spawn(map, options.player) : player.spawn(map))) ZL_LOG("the map has no open ground for the character");
+        if (posed) {
+            HumanMotion pose = options.pose;
+            pose.time = options.time;
+            player.set_motion(pose);
+        }
+    };
+    place_player(true);
+    Figure figure;
+    // Rebuilds the figure for the moment being drawn; null when there is no character.
+    const auto pose_figure = [&](f32 alpha) -> const Figure* {
+        if (!options.character) return nullptr;
+        build_human(player.look, player.motion_at(alpha), figure);
+        return &figure;
+    };
+    // The camera looks at the character's middle rather than its feet.
+    const auto player_focus = [&](f32 alpha) { return player.position_at(alpha) - Vec2{0.0f, 0.5f}; };
+
     Camera2D camera;
     camera.viewport = {static_cast<f32>(options.width), static_cast<f32>(options.height)};
     if (options.whole_map) frame_whole_map(camera, map);
     else frame_start(camera, map);
+    if (options.character && options.have_player) camera.center = player_focus(1.0f);
     if (options.have_center) camera.center = options.center;
     if (options.zoom > 0.0f) camera.zoom = options.zoom;
 
@@ -292,12 +445,19 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (options.screenshot) return save_screenshot(renderer, camera, draw, options.screenshot) ? 0 : 1;
+    if (options.screenshot) return save_screenshot(scene, camera, draw, pose_figure(1.0f), player.position(), options.screenshot) ? 0 : 1;
 
     // --- interactive loop ---
     FixedStep sim(60.0);
     f64 last = now_seconds(), title_timer = 0.0, frame_ms_sum = 0.0;
     int frames = 0, shot_index = 0;
+    // The camera follows the character until the player takes it away with Tab.
+    bool follow = options.character;
+    u64 look_seed = options.look_seed;
+    if (follow && !options.whole_map && !options.have_center) {
+        camera.center = player_focus(1.0f);
+        if (options.zoom <= 0.0f) camera.zoom = kFollowZoom;
+    }
 
     while (!window.should_close()) {
         window.poll();
@@ -316,11 +476,29 @@ int main(int argc, char** argv) {
             map = generate_map(options.map, jobs);
             renderer.set_map(map, jobs);
             log_map(map);
+            place_player(false);
+            if (follow) camera.center = player_focus(1.0f);
         }
         if (in.pressed(Key::G)) draw.grid = !draw.grid;
         if (in.pressed(Key::V)) draw.overlay = static_cast<MapOverlay>((static_cast<int>(draw.overlay) + 1) % static_cast<int>(MapOverlay::Count));
-        if (in.pressed(Key::F)) frame_whole_map(camera, map);
-        if (in.pressed(Key::H)) frame_start(camera, map);
+        if (in.pressed(Key::F)) {
+            frame_whole_map(camera, map);
+            follow = false;
+        }
+        if (in.pressed(Key::H)) {
+            if (options.character) {
+                follow = true;
+                camera.zoom = kFollowZoom;
+            } else {
+                frame_start(camera, map);
+            }
+        }
+        if (options.character) {
+            if (in.pressed(Key::Tab)) follow = !follow;
+            if (in.pressed(Key::C)) player.look = make_look(++look_seed, false);
+            if (in.pressed(Key::Num1)) player.look = make_look(look_seed = 0, false);
+            if (in.pressed(Key::X)) player.look.hood_up = !player.look.hood_up;
+        }
         if (in.pressed(Key::F5)) {
             const std::string assets = find_assets(options.assets);
             const Stopwatch timer;
@@ -330,34 +508,55 @@ int main(int argc, char** argv) {
                    art.painted_sprites ? "painted" : "placeholder", timer.millis());
         }
 
-        // Camera: keyboard pan at a constant on-screen speed, drag to grab the
-        // map, wheel zooms about the cursor.
-        Vec2 pan{0, 0};
-        if (in.down(Key::A) || in.down(Key::Left)) pan.x -= 1.0f;
-        if (in.down(Key::D) || in.down(Key::Right)) pan.x += 1.0f;
-        if (in.down(Key::W) || in.down(Key::Up)) pan.y -= 1.0f;
-        if (in.down(Key::S) || in.down(Key::Down)) pan.y += 1.0f;
-        const f32 speed = (in.down(Key::LeftShift) ? 2400.0f : 1000.0f) / camera.zoom;
-        camera.center += pan * (speed * static_cast<f32>(dt));
-        if (in.down(MouseButton::Right) || in.down(MouseButton::Middle)) camera.center -= in.mouse_delta / camera.zoom;
-        if (in.scroll != 0.0f) camera.zoom_at(in.mouse, std::pow(1.15f, in.scroll), fit_zoom(map, camera.viewport) * 0.7f, 128.0f);
+        // The direction keys steer the character while the camera follows
+        // it, and pan the camera at a constant on-screen speed when it is free.
+        Vec2 keys{0, 0};
+        if (in.down(Key::A) || in.down(Key::Left)) keys.x -= 1.0f;
+        if (in.down(Key::D) || in.down(Key::Right)) keys.x += 1.0f;
+        if (in.down(Key::W) || in.down(Key::Up)) keys.y -= 1.0f;
+        if (in.down(Key::S) || in.down(Key::Down)) keys.y += 1.0f;
+        PlayerInput input;
+        if (follow) {
+            input.move = keys;
+            input.sprint = in.down(Key::LeftShift);
+            input.walk = in.down(Key::LeftControl);
+        } else {
+            const f32 speed = (in.down(Key::LeftShift) ? 2400.0f : 1000.0f) / camera.zoom;
+            camera.center += keys * (speed * static_cast<f32>(dt));
+            // Dragging grabs the map.
+            if (in.down(MouseButton::Right) || in.down(MouseButton::Middle)) camera.center -= in.mouse_delta / camera.zoom;
+        }
+
+        // The simulation ticks at a fixed rate; so far the character is all there is to move.
+        const int steps = sim.advance(dt);
+        if (options.character) {
+            for (int k = 0; k < steps; ++k) player.step(map, input, static_cast<f32>(sim.step_seconds()));
+        }
+        const f32 alpha = static_cast<f32>(sim.alpha());
+        draw.time = static_cast<f32>(now);
+
+        // The wheel zooms about the cursor, or about the character while following.
+        const f32 min_zoom = fit_zoom(map, camera.viewport) * 0.7f;
+        if (follow) {
+            if (in.scroll != 0.0f) camera.zoom = clamp(camera.zoom * std::pow(1.15f, in.scroll), min_zoom, kMaxZoom);
+            camera.center += (player_focus(alpha) - camera.center) * (1.0f - std::exp(-static_cast<f32>(dt) * 9.0f));
+        } else if (in.scroll != 0.0f) {
+            camera.zoom_at(in.mouse, std::pow(1.15f, in.scroll), min_zoom, options.character ? kMaxZoom : 128.0f);
+        }
         camera.center.x = clamp(camera.center.x, 0.0f, static_cast<f32>(map.width));
         camera.center.y = clamp(camera.center.y, 0.0f, static_cast<f32>(map.height));
 
-        // The simulation will tick here at a fixed rate; nothing moves yet.
-        const int steps = sim.advance(dt);
-        (void)steps;
-        draw.time = static_cast<f32>(now);
-
         const Stopwatch frame_timer;
         RenderTarget::bind_default(fb.x, fb.y);
-        renderer.draw(camera, draw);
+        const Figure* posed = pose_figure(alpha);
+        const Vec2 standing = player.position_at(alpha);
+        scene.draw(camera, draw, posed, standing);
         frame_ms_sum += frame_timer.millis();
         ++frames;
 
         if (in.pressed(Key::F2)) {
             const std::string path = "zillions_" + std::to_string(map.seed) + "_" + std::to_string(shot_index++) + ".png";
-            save_screenshot(renderer, camera, draw, path.c_str());
+            save_screenshot(scene, camera, draw, posed, standing, path.c_str());
         }
 
         window.swap_buffers();
@@ -365,9 +564,9 @@ int main(int argc, char** argv) {
         title_timer += dt;
         if (title_timer >= 0.5) {
             char title[200];
-            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | 2 draw calls",
+            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | %d draw calls%s",
                           static_cast<unsigned long long>(map.seed), map.width, map.height, frames / title_timer, frame_ms_sum / frames,
-                          renderer.sprites_drawn());
+                          renderer.sprites_drawn(), options.character ? 4 : 2, options.character && !follow ? " | free camera (Tab)" : "");
             window.set_title(title);
             title_timer = 0.0;
             frame_ms_sum = 0.0;

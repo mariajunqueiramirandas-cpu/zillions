@@ -17,9 +17,11 @@ enum class Key : i32 {
     A = 65, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
     Escape = 256,
     Enter = 257,
+    Tab = 258,
     Right = 262, Left, Down, Up,
     F1 = 290, F2, F3, F4, F5,
     LeftShift = 340,
+    LeftControl = 341,
     Count = 349,
 };
 

@@ -17,6 +17,12 @@ namespace {
 // of pixels and the ground shader alone carries the picture.
 constexpr f32 kDecorMinZoom = 2.5f;
 
+// Scenery taller than this many tiles turns translucent in front of a
+// SeeThrough box; it fades in over kSeeThroughFade tiles of overlap.
+constexpr f32 kSeeThroughMinHeight = 1.1f;
+constexpr f32 kSeeThroughFade = 0.45f;
+constexpr f32 kSeeThroughAlpha = 0.38f;
+
 // The terrain shader hard-codes the texture-array layer that holds noise.
 static_assert(kNoiseLayer == 8, "update NOISE in the terrain shader");
 
@@ -391,17 +397,23 @@ void MapRenderer::build_decor(const TileMap& map) {
     std::stable_sort(placed.begin(), placed.end(), [](const Placed& a, const Placed& b) { return a.ground_y < b.ground_y; });
 
     decor_.resize(placed.size());
+    decor_y_.resize(placed.size());
     row_start_.assign(static_cast<size_t>(map.height) + 1, static_cast<u32>(placed.size()));
     i32 row = 0;
     for (size_t k = 0; k < placed.size(); ++k) {
         decor_[k] = placed[k].sprite;
+        decor_y_[k] = placed[k].ground_y;
         const i32 sprite_row = clamp(static_cast<i32>(std::floor(placed[k].ground_y)), 0, map.height - 1);
         for (; row <= sprite_row; ++row) row_start_[static_cast<size_t>(row)] = static_cast<u32>(k);
     }
 }
 
 void MapRenderer::draw(const Camera2D& camera, const MapDrawOptions& options) {
-    // --- ground ---
+    draw_ground(camera, options);
+    draw_scenery(camera, -1.0e30f, 1.0e30f);
+}
+
+void MapRenderer::draw_ground(const Camera2D& camera, const MapDrawOptions& options) {
     glDisable(GL_BLEND);
     terrain_.bind();
     const f32 inv_zoom = 1.0f / camera.zoom;
@@ -420,31 +432,48 @@ void MapRenderer::draw(const Camera2D& camera, const MapDrawOptions& options) {
     surface_.bind(4);
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
-
-    // --- scenery ---
     sprites_drawn_ = 0;
+}
+
+void MapRenderer::draw_scenery(const Camera2D& camera, f32 y_begin, f32 y_end, const SeeThrough* reveal) {
     if (camera.zoom < kDecorMinZoom || decor_.empty()) return;
     const Vec2 lo = camera.visible_min(), hi = camera.visible_max();
     // Sprites rise above their ground row, so look a few rows further south.
     const i32 first_row = clamp(static_cast<i32>(std::floor(lo.y)) - 1, 0, map_height_);
     const i32 last_row = clamp(static_cast<i32>(std::floor(hi.y)) + 5, 0, map_height_);
-    const u32 begin = row_start_[static_cast<size_t>(first_row)], end = row_start_[static_cast<size_t>(last_row)];
+    u32 begin = row_start_[static_cast<size_t>(first_row)], end = row_start_[static_cast<size_t>(last_row)];
+    // Narrow the visible rows to the slice of depth asked for.
+    const auto index_of = [this](f32 y) { return static_cast<u32>(std::lower_bound(decor_y_.begin(), decor_y_.end(), y) - decor_y_.begin()); };
+    begin = std::max(begin, index_of(y_begin));
+    end = std::min(end, index_of(y_end));
     if (end <= begin) return;
 
     SpriteInstance* out = batch_.begin(end - begin);
     u32 count = 0;
-    if (lo.x <= 0.0f && hi.x >= static_cast<f32>(map_width_)) {
+    if (!reveal && lo.x <= 0.0f && hi.x >= static_cast<f32>(map_width_)) {
         count = end - begin;
         std::memcpy(out, decor_.data() + begin, static_cast<size_t>(count) * sizeof(SpriteInstance));
     } else {
         for (u32 k = begin; k < end; ++k) {
             const SpriteInstance& s = decor_[k];
             if (s.x > hi.x || s.x + s.w < lo.x) continue;
-            out[count++] = s;
+            SpriteInstance sprite = s;
+            // Only things tall enough to hide a figure give way; ground cover
+            // in front of its feet stays solid.
+            if (reveal && s.h > kSeeThroughMinHeight) {
+                const f32 overlap_x = std::min(s.x + s.w, reveal->hi.x) - std::max(s.x, reveal->lo.x);
+                const f32 overlap_y = std::min(s.y + s.h, reveal->hi.y) - std::max(s.y, reveal->lo.y);
+                const f32 cover = saturate(std::min(overlap_x, overlap_y) / kSeeThroughFade);
+                if (cover > 0.0f) {
+                    const u32 alpha = static_cast<u32>(lerp(255.0f, 255.0f * kSeeThroughAlpha, cover) + 0.5f);
+                    sprite.color = (s.color & 0x00FFFFFFu) | (alpha << 24);
+                }
+            }
+            out[count++] = sprite;
         }
     }
     batch_.draw(count, camera, sprites_);
-    sprites_drawn_ = count;
+    sprites_drawn_ += count;
 }
 
 }  // namespace zl
