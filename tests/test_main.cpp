@@ -1,9 +1,11 @@
 // Headless test suite. A deliberately tiny harness: TEST registers a function,
 // CHECK records a failure and carries on, main runs everything.
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -325,6 +327,28 @@ TEST(mapgen_resolution_keeps_the_geography) {
 
 // --- art ----------------------------------------------------------------------
 
+struct ArtTestDirectory {
+    std::filesystem::path path;
+
+    ArtTestDirectory() {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (int i = 0; i < 100; ++i) {
+            path = std::filesystem::temp_directory_path() / ("zl_art_" + std::to_string(stamp) + "_" + std::to_string(i));
+            if (std::filesystem::create_directory(path)) return;
+        }
+        ZL_CHECK(false, "cannot create an art test directory");
+    }
+    ~ArtTestDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
+    void copy_assets() const {
+        for (const char* group : {"ground", "sprites"}) {
+            std::filesystem::copy(std::filesystem::path(ZL_ASSET_DIR) / group, path / group, std::filesystem::copy_options::recursive);
+        }
+    }
+};
+
 bool same_pixels(const Image& a, const Image& b) {
     if (a.width != b.width || a.height != b.height) return false;
     for (size_t i = 0; i < a.pixels.size(); ++i) {
@@ -343,7 +367,8 @@ TEST(png_round_trips) {
             image.at(x, y) = {static_cast<u8>(h), static_cast<u8>(h >> 8), static_cast<u8>(h >> 16), static_cast<u8>(h >> 24)};
         }
     }
-    const std::string path = (std::filesystem::temp_directory_path() / "zl_test_round_trip.png").string();
+    const ArtTestDirectory directory;
+    const std::string path = (directory.path / "round_trip.png").string();
     CHECK(write_png(path.c_str(), image));
     Image back;
     CHECK(read_png(path.c_str(), back));
@@ -353,6 +378,13 @@ TEST(png_round_trips) {
     // A missing file is reported and leaves the image alone.
     CHECK(!read_png(path.c_str(), back));
     CHECK(same_pixels(image, back));
+
+    // Corrupt files, including a truncated PNG, must not destroy the caller's image.
+    for (const std::string& contents : {std::string("not a PNG"), std::string("\x89PNG\r\n\x1a\n", 8)}) {
+        std::ofstream(path, std::ios::binary).write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        CHECK(!read_png(path.c_str(), back));
+        CHECK(same_pixels(image, back));
+    }
 }
 
 void check_art_is_well_formed(const TerrainArt& art) {
@@ -410,11 +442,61 @@ TEST(painted_art_loads_from_files) {
     CHECK(same_pixels(layer(painted, static_cast<int>(Terrain::Water)), layer(drawn, static_cast<int>(Terrain::Water))));
     CHECK(same_pixels(layer(painted, kNoiseLayer), layer(drawn, kNoiseLayer)));
     for (const Color& c : layer(painted, static_cast<int>(Terrain::Grass)).pixels) CHECK(c.a == 255);
+
+    // Check actual decoded texels, not just that files differ from placeholders.
+    const char* names[] = {nullptr, "shallows", "sand", "grass", "dirt", "forest", "mountain", "rocks"};
+    for (int t = 1; t < kTerrainCount; ++t) {
+        Image source;
+        const std::string path = std::string(ZL_ASSET_DIR) + "/ground/" + names[t] + ".png";
+        CHECK(read_png(path.c_str(), source));
+        CHECK(same_pixels(layer(painted, t), source));
+    }
+
+    const char* families[] = {"broadleaf", "conifer", "bush", "stone", "iron", "gold", "tuft", "flower", "pebble", "reed", "boulder"};
+    const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush, &TerrainArt::stone,
+                                            &TerrainArt::iron, &TerrainArt::gold, &TerrainArt::tuft, &TerrainArt::flower,
+                                            &TerrainArt::pebble, &TerrainArt::reed, &TerrainArt::boulder};
+    for (size_t f = 0; f < std::size(families); ++f) {
+        const SpriteSet& set = painted.*sets[f];
+        for (int v = 0; v < set.count; ++v) {
+            const SpriteDef& def = painted.defs[static_cast<size_t>(set.first + v)];
+            const auto coordinate = [&](u16 uv) {
+                return static_cast<i32>(std::lround(static_cast<f32>(uv) * static_cast<f32>(painted.sprites.width) / 65535.0f));
+            };
+            const i32 ox = coordinate(def.u0), oy = coordinate(def.v0);
+            CHECK(ox % kSpriteAtlasPadding == 0 && oy % kSpriteAtlasPadding == 0);
+            Image source;
+            const std::string path = std::string(ZL_ASSET_DIR) + "/sprites/" + families[f] + "_" + std::to_string(v) + ".png";
+            CHECK(read_png(path.c_str(), source));
+            CHECK(coordinate(def.u1) - ox == source.width && coordinate(def.v1) - oy == source.height);
+            for (i32 y = 0; y < source.height; ++y) {
+                for (i32 x = 0; x < source.width; ++x) {
+                    const Color& s = source.at(x, y);
+                    const Color& a = painted.sprites.at(ox + x, oy + y);
+                    CHECK(a.a == s.a);
+                    CHECK(a.r == (s.r * s.a + 127u) / 255u);
+                    CHECK(a.g == (s.g * s.a + 127u) / 255u);
+                    CHECK(a.b == (s.b * s.a + 127u) / 255u);
+                }
+            }
+            // A full transparent mip texel separates every sprite at the
+            // coarsest permitted level. No neighbour can enter its filter.
+            bool isolated = true;
+            for (i32 y = -kSpriteAtlasPadding; y < source.height + kSpriteAtlasPadding; ++y) {
+                for (i32 x = -kSpriteAtlasPadding; x < source.width + kSpriteAtlasPadding; ++x) {
+                    if (x >= 0 && x < source.width && y >= 0 && y < source.height) continue;
+                    isolated = isolated && painted.sprites.at(ox + x, oy + y).a == 0;
+                }
+            }
+            CHECK(isolated);
+        }
+    }
 }
 
 TEST(art_falls_back_to_placeholders_without_files) {
     JobSystem jobs(4);
-    const std::string missing = (std::filesystem::temp_directory_path() / "zl_test_no_such_assets").string();
+    const ArtTestDirectory directory;
+    const std::string missing = (directory.path / "missing").string();
     const TerrainArt fallback = load_terrain_art(jobs, missing.c_str());
     CHECK(!fallback.painted_ground && !fallback.painted_sprites);
     check_art_is_well_formed(fallback);
@@ -424,6 +506,41 @@ TEST(art_falls_back_to_placeholders_without_files) {
     const TerrainArt drawn = build_terrain_art(single);
     CHECK(same_pixels(fallback.sprites, drawn.sprites));
     for (size_t i = 0; i < drawn.ground.size(); ++i) CHECK(same_pixels(fallback.ground[i], drawn.ground[i]));
+}
+
+TEST(incomplete_art_falls_back_by_group_without_partial_replacement) {
+    const ArtTestDirectory directory;
+    directory.copy_assets();
+    const std::string dir = directory.path.string();
+    JobSystem jobs(4);
+    const TerrainArt drawn = build_terrain_art(jobs);
+    const TerrainArt painted = load_terrain_art(jobs, ZL_ASSET_DIR);
+
+    // Fail on the LAST member of each group: earlier files must not leak into
+    // the fallback. The other complete group must still load from disk.
+    for (const bool ground : {false, true}) {
+        const char* relative = ground ? "ground/rocks.png" : "sprites/boulder_3.png";
+        const auto file = directory.path / relative;
+        for (int failure = 0; failure < 3; ++failure) {
+            std::filesystem::remove(file);
+            if (failure == 1) CHECK(write_png(file.string().c_str(), Image(3, 5, Color{255, 0, 0, 255})));
+            if (failure == 2) std::ofstream(file, std::ios::binary) << "corrupt PNG";
+            const TerrainArt art = load_terrain_art(jobs, dir.c_str());
+            CHECK(art.painted_ground == !ground && art.painted_sprites == ground);
+            const TerrainArt& expected_ground = ground ? drawn : painted;
+            for (size_t i = 0; i < art.ground.size(); ++i) CHECK(same_pixels(art.ground[i], expected_ground.ground[i]));
+            CHECK(same_pixels(art.sprites, ground ? painted.sprites : drawn.sprites));
+            // Both sources keep identical atlas slots for live reload.
+            CHECK(art.defs.size() == painted.defs.size());
+            for (size_t i = 0; i < art.defs.size(); ++i) {
+                const SpriteDef& a = art.defs[i];
+                const SpriteDef& b = painted.defs[i];
+                CHECK(a.u0 == b.u0 && a.u1 == b.u1 && a.v0 == b.v0 && a.v1 == b.v1);
+                CHECK(a.width == b.width && a.height == b.height && a.anchor_x == b.anchor_x && a.anchor_y == b.anchor_y);
+            }
+        }
+        std::filesystem::copy_file(std::filesystem::path(ZL_ASSET_DIR) / relative, file, std::filesystem::copy_options::overwrite_existing);
+    }
 }
 
 }  // namespace

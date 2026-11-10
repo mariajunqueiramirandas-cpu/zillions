@@ -45,7 +45,7 @@ void usage() {
         "  --resolution N       tiles per world unit: 1, 2 or 4 (default 2)\n"
         "  --width W --height H window or screenshot size in pixels\n"
         "  --no-vsync           uncap the frame rate\n"
-        "  --assets DIR         directory with the painted art (default: ./assets)\n"
+        "  --assets DIR         painted art directory (default: ./assets, then source tree)\n"
         "  --screenshot FILE    render one frame to a PNG and exit\n"
         "  --bench              time the renderer off-screen and exit\n"
         "  --whole-map          frame the entire map (default: the start area)\n"
@@ -55,7 +55,7 @@ void usage() {
         "  --grid               draw tile borders\n"
         "controls: WASD/arrows or right-drag to pan, wheel to zoom, R new map,\n"
         "          V cycle overlay (height, passability),\n"
-        "          G grid, F whole map, H start area, F2 screenshot, Esc quit");
+        "          G grid, F whole map, H start area, F2 screenshot, F5 reload art, Esc quit");
 }
 
 bool parse(int argc, char** argv, Options& o) {
@@ -68,7 +68,13 @@ bool parse(int argc, char** argv, Options& o) {
         else if (is("--width")) o.width = std::atoi(next());
         else if (is("--height")) o.height = std::atoi(next());
         else if (is("--no-vsync")) o.vsync = false;
-        else if (is("--assets")) o.assets = next();
+        else if (is("--assets")) {
+            if (i + 1 >= argc) {
+                usage();
+                return false;
+            }
+            o.assets = argv[++i];
+        }
         else if (is("--screenshot")) o.screenshot = next();
         else if (is("--bench")) o.bench = true;
         else if (is("--whole-map")) o.whole_map = true;
@@ -107,9 +113,9 @@ bool parse(int argc, char** argv, Options& o) {
 std::string find_assets(const char* requested) {
     if (requested) return requested;
     std::error_code error;
-    if (std::filesystem::is_directory("assets/ground", error)) return "assets";
+    if (std::filesystem::is_directory("assets", error)) return "assets";
 #ifdef ZL_ASSET_DIR
-    if (std::filesystem::is_directory(ZL_ASSET_DIR "/ground", error)) return ZL_ASSET_DIR;
+    if (std::filesystem::is_directory(ZL_ASSET_DIR, error)) return ZL_ASSET_DIR;
 #endif
     return {};
 }
@@ -315,6 +321,14 @@ int main(int argc, char** argv) {
         if (in.pressed(Key::V)) draw.overlay = static_cast<MapOverlay>((static_cast<int>(draw.overlay) + 1) % static_cast<int>(MapOverlay::Count));
         if (in.pressed(Key::F)) frame_whole_map(camera, map);
         if (in.pressed(Key::H)) frame_start(camera, map);
+        if (in.pressed(Key::F5)) {
+            const std::string assets = find_assets(options.assets);
+            const Stopwatch timer;
+            renderer.reload_art(jobs, assets.empty() ? nullptr : assets.c_str());
+            const TerrainArt& art = renderer.art();
+            ZL_LOG("art reloaded: %s ground, %s sprites, ready in %.1f ms", art.painted_ground ? "painted" : "placeholder",
+                   art.painted_sprites ? "painted" : "placeholder", timer.millis());
+        }
 
         // Camera: keyboard pan at a constant on-screen speed, drag to grab the
         // map, wheel zooms about the cursor.

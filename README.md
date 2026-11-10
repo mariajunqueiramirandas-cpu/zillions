@@ -65,11 +65,16 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
+| F5 | reload ground textures and sprites without changing the map or camera |
 
 The painted art is read from `--assets DIR`, or by default from `./assets`, or
 failing that from the `assets` folder of the source tree the binary was built
 from. If the ground textures or the sprites cannot be loaded, the viewer says
 why and draws that group in code instead.
+
+F5 repeats the same asset lookup, so edits can be checked without restarting.
+With automatic discovery, a local `assets` directory takes precedence even if
+one group is incomplete; the log reports that group's fallback.
 
 `zl_mapgen` is the headless generator: `--out preview.png` writes a flat-colour
 preview, `--bench` times generation.

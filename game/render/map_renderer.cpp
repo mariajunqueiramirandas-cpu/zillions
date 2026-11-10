@@ -236,12 +236,7 @@ MapRenderer::~MapRenderer() {
 }
 
 void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
-    art_ = load_terrain_art(jobs, asset_dir);
-    ground_.create_array(art_.ground, TextureFilter::Trilinear, TextureWrap::Repeat);
-    sprites_.create(art_.sprites, TextureFilter::Trilinear, TextureWrap::Clamp);
-    // The CPU copies are only needed for upload.
-    art_.ground.clear();
-    art_.ground.shrink_to_fit();
+    reload_art(jobs, asset_dir);
 
     terrain_.compile("terrain", kTerrainVertex, kTerrainFragment);
     terrain_.bind();
@@ -261,6 +256,16 @@ void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
 
     glGenVertexArrays(1, &vao_);
     batch_.init();
+}
+
+void MapRenderer::reload_art(JobSystem& jobs, const char* asset_dir) {
+    art_ = load_terrain_art(jobs, asset_dir);
+    ground_.create_array(art_.ground, TextureFilter::Trilinear, TextureWrap::Repeat);
+    sprites_.create(art_.sprites, TextureFilter::Trilinear, TextureWrap::Clamp, kSpriteAtlasMipLevel);
+    // CPU images are only needed during upload; keep the catalogue and flags.
+    art_.ground.clear();
+    art_.ground.shrink_to_fit();
+    art_.sprites = {};
 }
 
 void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {

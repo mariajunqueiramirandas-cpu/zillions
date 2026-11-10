@@ -651,11 +651,14 @@ public:
 
     // Adds a premultiplied sprite whose ground contact point is (anchor_x, anchor_y) in pixels.
     void add(SpriteSet& set, const Image& sprite, f32 anchor_x, f32 anchor_y) {
-        constexpr i32 kPad = 4;  // keeps neighbours from bleeding in at lower mip levels
+        constexpr i32 kPad = kSpriteAtlasPadding;
+        // Align slots to the coarsest mip's texel grid. Both the padding and
+        // alignment matter: otherwise a mip texel can average two sprites.
+        const auto slot_size = [](i32 v) { return ((v + 2 * kPad + kPad - 1) / kPad) * kPad; };
         const i32 size = art_.sprites.width;
         if (x_ + sprite.width + kPad > size) {
             x_ = kPad;
-            y_ += row_height_ + kPad;
+            y_ += row_height_;
             row_height_ = 0;
         }
         ZL_CHECK(y_ + sprite.height + kPad <= size, "sprite atlas is full");
@@ -678,13 +681,13 @@ public:
         ++set.count;
         art_.defs.push_back(def);
 
-        x_ += sprite.width + kPad;
-        row_height_ = std::max(row_height_, sprite.height);
+        x_ += slot_size(sprite.width);
+        row_height_ = std::max(row_height_, slot_size(sprite.height));
     }
 
 private:
     TerrainArt& art_;
-    i32 x_ = 4, y_ = 4, row_height_ = 0;
+    i32 x_ = kSpriteAtlasPadding, y_ = kSpriteAtlasPadding, row_height_ = 0;
 };
 
 }  // namespace

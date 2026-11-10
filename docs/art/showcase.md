@@ -59,7 +59,8 @@ Premultiply once before uploading into the renderer's premultiplied atlas.
 Anchors are measured from the canvas's upper-left corner, at 32 authoring pixels
 per tile. Sources are cropped, scaled without changing aspect ratio, and placed
 on transparent canvases around the recorded footprints. Individual object
-placement should still be checked in the engine during integration.
+placement has also been reviewed in the viewer; see the
+[runtime integration checks](integration.md).
 
 To reproduce all exports, the manifest and the contact sheets, use Python 3
 with Pillow (validated with 13.0.0):
@@ -96,8 +97,9 @@ values (rounded), included to make that difference reviewable:
 Forest is a little lighter than its range; sand and shallows are warmer than
 requested, and mountain grain retains a warm cast. The mountain export remains
 below the 55% brightness ceiling. Palette matching, sprite contact shadows and
-far-zoom ground-cover visibility should be judged with the shader's final
-colours during integration. This showcase does not mark the art brief's full
+far-zoom ground-cover visibility have been reviewed with the shader's final
+colours in the viewer. Further palette refinement remains artwork polish.
+This showcase does not mark the art brief's full
 production checklist as complete.
 
 ## Validation
@@ -108,5 +110,5 @@ transparent pixels, sRGB PNG tags and the mountain brightness ceiling. Contact
 sheets were inspected at 16, 32 and 64 pixels per tile, with 8-pixel output
 provided for review. Both ground repeat proofs are included above.
 
-The existing C++ build and headless CTest suite also pass. No runtime source or
-dependency declarations changed in this artwork delivery.
+The C++ build and headless CTest suite also pass. The viewer now loads these
+assets; [runtime checks and screenshots](integration.md) document that integration.

@@ -1,34 +1,36 @@
 # Zillions: to do
 
-Open work after the painted art was loaded into the viewer. Grouped by area,
-most useful first.
+Painted-art integration is complete. The checks below record the integration
+review; remaining unchecked items are future artwork polish or game features.
 
 ## Art
 
 - [ ] Palette: forest, sand and shallows are outside their brief ranges (see
       the palette review in `docs/art/showcase.md`). Regenerate or retouch the
       source sheets, then re-export with `tools/art/export_assets.py`.
-- [ ] Sprites: judge contact shadows and far-zoom readability in the viewer;
-      retouch any sprite that is lost at 16 px per tile.
-- [ ] Trees: the broadleaf variants 3 to 5 are thinner than the brief asks for
-      in places; check they still read as a solid mass.
-- [ ] Decide the final delivery scale. The art is authored at 32 px per tile;
-      if files move to 2x, `kArtTilePixels` and every anchor must change too.
+- [x] Sprites: reviewed contact shadows and readability in the viewer at 8,
+      16, 32 and 64 px per tile. Small ground cover stays quiet and walkable;
+      trees and deposits retain distinct silhouettes.
+- [x] Trees: checked variants 3 to 5 in overlapping groves. The thin crowns
+      remain recognisable as trees; fuller crowns can be an artwork revision.
+- [x] Keep this delivery at 32 authoring px per tile and the existing anchors.
 
 ## Shader
 
-- [ ] Tune `WATER_*`, `FOAM`, `SCRUB` and `HAZE` in `kTerrainFragment` after a
-      look at a full map, not just the start area.
-- [ ] Check the overall desaturation and haze on the far zoom levels, where the
-      ground textures carry the picture alone.
+- [x] Reviewed `WATER_*`, `FOAM`, `SCRUB` and `HAZE` on full maps (seeds 3 and 7)
+      and the start area. Fords remain paler than water and cliffs read clearly.
+- [x] Checked desaturation and haze on a full 1024 × 1024 map, below the sprite
+      cutoff, where forest ground alone must distinguish groves from grass.
 
 ## Engine and tools
 
-- [ ] Hot-reload the art, or at least a key to reload it without restarting.
-- [ ] Mipmapped sprite atlas bleeding: verify the 4 px padding holds at the
-      smallest zoom with the painted (not generated) edges.
-- [ ] Decide whether `tools/art/export_assets.py` should be run in CI, or only
-      by hand when the sources change.
+- [x] F5 reloads art, with fallback and recovery for either group, preserving
+      the map and view. Verified in the live viewer with removed/restored files.
+- [x] Replaced 4 px atlas padding with aligned 16 px padding and a level-4 mip
+      limit. Tested every sprite's texels and guard space; reviewed rendering
+      at 2.5 px per tile, just before scenery is culled.
+- [x] Keep export manual when source paintings change. Normal builds consume
+      committed PNGs; headless tests check decoding, packing and fallback.
 
 ## Game (not started)
 

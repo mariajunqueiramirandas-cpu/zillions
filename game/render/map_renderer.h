@@ -40,6 +40,9 @@ public:
     // `asset_dir` is where the painted art lives (see load_terrain_art); null
     // draws placeholder art in code.
     void init(JobSystem& jobs, const char* asset_dir = nullptr);
+    // Canvas sizes and atlas slots are fixed for both art sources, so scenery
+    // keeps its UVs and the map/camera need not be rebuilt when art changes.
+    void reload_art(JobSystem& jobs, const char* asset_dir);
     void set_map(const TileMap& map, JobSystem& jobs);
     void draw(const Camera2D& camera, const MapDrawOptions& options);
 

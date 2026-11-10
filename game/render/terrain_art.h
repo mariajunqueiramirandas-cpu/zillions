@@ -18,6 +18,10 @@ class JobSystem;
 inline constexpr i32 kArtTilePixels = 32;
 // Each ground texture repeats every this many tiles.
 inline constexpr i32 kGroundRepeatTiles = 8;
+// Keep sprites isolated through mip level 4 (1/16 scale). Sprites disappear
+// below 2.5 px/tile, before a smaller mip could add useful detail.
+inline constexpr i32 kSpriteAtlasMipLevel = 4;
+inline constexpr i32 kSpriteAtlasPadding = 1 << kSpriteAtlasMipLevel;
 // Extra texture-array layer holding tileable noise for the terrain shader.
 inline constexpr i32 kNoiseLayer = kTerrainCount;
 

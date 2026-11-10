@@ -23,8 +23,9 @@ public:
     Texture(const Texture&) = delete;
     Texture& operator=(const Texture&) = delete;
 
-    // 2D RGBA8 texture.
-    void create(const Image& image, TextureFilter filter, TextureWrap wrap);
+    // 2D RGBA8 texture. Limit the generated mip chain for padded atlases;
+    // -1 keeps the full chain.
+    void create(const Image& image, TextureFilter filter, TextureWrap wrap, i32 max_mip_level = -1);
     // 2D array texture; all layers must have the same size.
     void create_array(const std::vector<Image>& layers, TextureFilter filter, TextureWrap wrap);
 

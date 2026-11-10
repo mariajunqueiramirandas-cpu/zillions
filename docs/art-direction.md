@@ -144,7 +144,9 @@ These facts explain most of the constraints below.
   neighbouring terrains along a wandering border, then multiplies the result by
   lighting, shadow, a height tint and a large-scale light/dark variation.
 - **Sprites.** All sprites are packed into one 1024 × 1024 atlas with
-  mipmaps and drawn with premultiplied alpha. Each sprite has an **anchor**:
+  mipmaps and drawn with premultiplied alpha. Slots have 16 px transparent
+  padding and alignment, and the mip chain stops at level 4 to keep neighbouring
+  sprites out of the filter when zoomed out. Each sprite has an **anchor**:
   the pixel that sits on the object's position on the ground. Sprites are drawn
   north to south, so an object overlaps whatever is behind it.
 - **No rotation and no mirroring.** A sprite is only ever scaled (roughly 0.7×

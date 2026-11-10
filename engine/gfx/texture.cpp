@@ -30,12 +30,13 @@ void Texture::reset(u32 target) {
     glBindTexture(target_, id_);
 }
 
-void Texture::create(const Image& image, TextureFilter filter, TextureWrap wrap) {
+void Texture::create(const Image& image, TextureFilter filter, TextureWrap wrap, i32 max_mip_level) {
     reset(GL_TEXTURE_2D);
     width_ = image.width;
     height_ = image.height;
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.bytes());
+    if (max_mip_level >= 0) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, max_mip_level);
     set_sampling(GL_TEXTURE_2D, filter, wrap);
 }
 
