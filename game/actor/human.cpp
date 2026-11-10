@@ -19,7 +19,7 @@ constexpr f32 kHipStanding = 0.915f;  // height of the hip joint when standing
 constexpr f32 kHipWidth = 0.092f;     // from the spine out to each hip joint
 constexpr f32 kShoulderWidth = 0.185f;
 constexpr f32 kAnkleHeight = 0.075f;
-constexpr f32 kHeelBack = 0.05f;      // sole: heel behind the ankle,
+constexpr f32 kHeelBack = 0.020f;    // sole: heel behind the ankle,
 constexpr f32 kBallAhead = 0.105f;    // ball of the foot ahead of it,
 constexpr f32 kToeLength = 0.045f;    // and the toes beyond that
 constexpr f32 kHeadRadius = 0.098f;
@@ -433,7 +433,9 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
         paint.cone(top, ankle, 0.056f * bw, 0.050f, look.boots, Mat::Leather, boot);
         paint.band(top, ankle, 0.056f * bw, 0.050f, -0.04f, 0.24f, 0.009f, cuff, Mat::Leather, boot);
         const Vec3 up = rig.foot[i].u;
-        paint.cone(s.heel[i] + up * 0.043f, s.ball[i] + up * 0.037f, 0.043f, 0.038f, look.boots, Mat::Leather, boot);
+        // The rear cap adds its own radius: keep its outer edge under the
+        // ankle shaft instead of extending the heel behind it a second time.
+        paint.cone(s.heel[i] + up * 0.030f, s.ball[i] + up * 0.037f, 0.030f, 0.038f, look.boots, Mat::Leather, boot);
         paint.cone(s.ball[i] + up * 0.037f, s.toe[i] + up * 0.031f, 0.038f, 0.031f, look.boots, Mat::Leather, boot);
     }
 

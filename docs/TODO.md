@@ -45,7 +45,8 @@ in `docs/character.md`.
 - [x] Head: raised face directions nine degrees to correct the downward read.
 - [x] Hood cape: flatter, cut shoulder panels with dark hem bands; reviewed
       front, profile, back and raised-hood views.
-- [x] Boots: shorter ball/toe reach and seven-degree standing turnout.
+- [x] Boots: shorter ball/toe reach, seven-degree standing turnout and a
+      smaller heel offset/rear cap that keeps the heel under the ankle shaft.
 - [x] Skirt: all three panels share a hem height, with vertical hem bands.
 - [x] Reviewed walk, jog and sprint cycles, back views, all five hair styles,
       beard, hood, blinking and seeded looks. The sheet now guarantees these

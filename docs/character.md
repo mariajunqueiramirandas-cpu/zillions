@@ -42,8 +42,10 @@ The skin hangs hose, boots, tunic, cuffs, shoulder cape, head, hair and gear on
 those frames. Eyes and brows are small enough for the head; face features are
 raised nine degrees to compensate for the projected forward axis. Facial
 details keep their own shading without contact shadows. Shorter boots turn
-out seven degrees at rest. The cape uses flatter, cut panels with dark hems;
-the three skirt panels share one hem height and vertical hem bands.
+out seven degrees at rest; the heel offset and rounded rear cap together stop
+at the ankle shaft, avoiding a protruding heel. The cape uses flatter, cut
+panels with dark hems. The three skirt panels share one hem height and vertical
+hem bands.
 
 ## Movement and camera
 
