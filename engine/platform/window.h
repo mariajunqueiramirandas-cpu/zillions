@@ -74,6 +74,7 @@ private:
     bool have_mouse_ = false;
     bool mouse_moved_ = false;
     f32 pending_scroll_ = 0.0f;
+    bool pending_key_pressed_[static_cast<int>(Key::Count)] = {};
 };
 
 }  // namespace zl

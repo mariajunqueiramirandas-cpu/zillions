@@ -19,9 +19,19 @@ f32 angle_between(f32 from, f32 to) {
 
 }  // namespace
 
-bool can_stand(const TileMap& map, Vec2 position, f32 radius) {
+namespace {
+bool body_support(const TileMap& map, i32 index) {
+    if (map.flags[static_cast<size_t>(index)] & TileFlag::Walkable) return true;
+    if (!map.scenery.ready) return false;  // conservative legacy/custom maps
+    const Terrain kind = map.terrain[static_cast<size_t>(index)];
+    if (kind == Terrain::Water || kind == Terrain::Mountain) return false;
+    const bool resource = static_cast<size_t>(index) < map.resource.size() && map.resource[static_cast<size_t>(index)] != Resource::None;
+    return kind == Terrain::Forest || kind == Terrain::Rocks || resource;
+}
+
+bool terrain_stand(const TileMap& map, Vec2 position, f32 radius) {
     const i32 cx = static_cast<i32>(std::floor(position.x)), cy = static_cast<i32>(std::floor(position.y));
-    if (!map.in_bounds(cx, cy) || !map.walkable(cx, cy)) return false;
+    if (!map.in_bounds(cx, cy) || !body_support(map, map.index(cx, cy))) return false;
     const i32 centre = map.index(cx, cy);
     const i32 x0 = static_cast<i32>(std::floor(position.x - radius)), x1 = static_cast<i32>(std::floor(position.x + radius));
     const i32 y0 = static_cast<i32>(std::floor(position.y - radius)), y1 = static_cast<i32>(std::floor(position.y + radius));
@@ -37,10 +47,24 @@ bool can_stand(const TileMap& map, Vec2 position, f32 radius) {
             // can_step() speaks of neighbours; the same rule (both walkable,
             // and level with each other unless one is a ramp) is what keeps a
             // body from hanging over a cliff edge at a corner.
-            if (!map.can_step(centre, map.index(x, y))) return false;
+            const i32 other = map.index(x, y);
+            if (!body_support(map, other)) return false;
+            const u8 flags = map.flags[static_cast<size_t>(centre)] | map.flags[static_cast<size_t>(other)];
+            if (map.level[static_cast<size_t>(centre)] != map.level[static_cast<size_t>(other)] && !(flags & TileFlag::Ramp)) return false;
         }
     }
     return true;
+}
+
+}  // namespace
+
+bool can_stand(const TileMap& map, Vec2 position, f32 radius, f32 height) {
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(radius) || radius < 0 ||
+        !std::isfinite(height) || height <= 0) return false;
+    if (position.x - radius < 0 || position.y - radius < 0 ||
+        position.x + radius > static_cast<f32>(map.width) || position.y + radius > static_cast<f32>(map.height)) return false;
+    if (!terrain_stand(map, position, radius)) return false;
+    return !map.scenery.overlaps(position, radius, collision_floor(map, position), height);
 }
 
 bool Player::spawn(const TileMap& map) {
@@ -48,11 +72,12 @@ bool Player::spawn(const TileMap& map) {
 }
 
 bool Player::spawn(const TileMap& map, Vec2 where) {
+    if (!std::isfinite(where.x) || !std::isfinite(where.y)) return false;
     velocity_ = drive_ = {0.0f, 0.0f};
     motion_ = previous_motion_ = HumanMotion{};
     const i32 cx = clamp(static_cast<i32>(std::floor(where.x)), 0, std::max(map.width - 1, 0));
     const i32 cy = clamp(static_cast<i32>(std::floor(where.y)), 0, std::max(map.height - 1, 0));
-    if (can_stand(map, where, kRadius)) {
+    if (can_stand(map, where, body_radius(), body_height())) {
         position_ = previous_position_ = where;
         motion_.wade = previous_motion_.wade = map.terrain[static_cast<size_t>(map.index(cx, cy))] == Terrain::Shallows ? kWadeDepth : 0.0f;
         return true;
@@ -66,7 +91,7 @@ bool Player::spawn(const TileMap& map, Vec2 where) {
             for (i32 x = cx - ring; x <= cx + ring; ++x) {
                 if (std::max(std::abs(x - cx), std::abs(y - cy)) != ring) continue;
                 const Vec2 centre{static_cast<f32>(x) + 0.5f, static_cast<f32>(y) + 0.5f};
-                if (!can_stand(map, centre, kRadius)) continue;
+                if (!can_stand(map, centre, body_radius(), body_height())) continue;
                 const Vec2 d = centre - where;
                 if (dot(d, d) < best) {
                     best = dot(d, d);
@@ -109,12 +134,20 @@ void Player::step(const TileMap& map, const PlayerInput& input, f32 dt) {
     const int hops = std::max(1, static_cast<int>(std::ceil(length(travel) / 0.08f)));
     const Vec2 hop = travel / static_cast<f32>(hops);
     for (int k = 0; k < hops; ++k) {
-        const Vec2 both = position_ + hop;
-        const Vec2 across{position_.x + hop.x, position_.y}, down{position_.x, position_.y + hop.y};
-        if (can_stand(map, both, kRadius)) position_ = both;
-        else if (hop.x != 0.0f && can_stand(map, across, kRadius)) position_ = across;
-        else if (hop.y != 0.0f && can_stand(map, down, kRadius)) position_ = down;
-        else break;
+        const auto candidate = [&](Vec2 displacement) {
+            return map.scenery.slide(position_, displacement, body_radius(), collision_floor(map, position_), body_height());
+        };
+        const Vec2 both = candidate(hop);
+        if (can_stand(map, both, body_radius(), body_height())) position_ = both;
+        else {
+            // Terrain's impassable tiles and cliff edges retain their axis
+            // slide. Every alternative still sweeps against object footprints.
+            const Vec2 across = candidate({hop.x, 0});
+            const Vec2 down = candidate({0, hop.y});
+            if (hop.x != 0.0f && can_stand(map, across, body_radius(), body_height())) position_ = across;
+            else if (hop.y != 0.0f && can_stand(map, down, body_radius(), body_height())) position_ = down;
+            else break;
+        }
     }
     const Vec2 old_velocity = velocity_;
     velocity_ = (position_ - before) / dt;
@@ -193,14 +226,16 @@ HumanMotion Player::motion_at(f32 alpha) const {
 
 namespace {
 
-bool clear_line(const TileMap& map, Vec2 from, Vec2 to, f32 radius) {
-    if (!can_stand(map, to, radius)) return false;
+bool clear_line(const TileMap& map, Vec2 from, Vec2 to, f32 radius, f32 height) {
+    if (!can_stand(map, to, radius, height)) return false;
     const Vec2 delta = to - from;
+    ObjectContact hit;
+    if (map.scenery.sweep(from, delta, radius, collision_floor(map, from), height, hit)) return false;
     const f32 dist = length(delta);
     const int steps = std::max(1, static_cast<int>(std::ceil(dist / 0.32f)));
     for (int i = 1; i < steps; ++i) {
         const Vec2 p = from + delta * (static_cast<f32>(i) / static_cast<f32>(steps));
-        if (!can_stand(map, p, radius)) return false;
+        if (!can_stand(map, p, radius, height)) return false;
     }
     return true;
 }
@@ -258,7 +293,7 @@ bool PlayerAutonomy::pick_waypoint(const TileMap& map, const Player& player, boo
         const Vec2 cand = origin + dir * radius;
         const f32 dist = length(cand - pos);
         if (dist < 1.0f || length(cand - anchor_) > kWanderRadius + 0.5f) continue;
-        if (!clear_line(map, pos, cand, Player::kRadius)) continue;
+        if (!clear_line(map, pos, cand, player.body_radius(), player.body_height())) continue;
 
         const Vec2 step_dir = (cand - pos) / dist;
         const f32 align = dot(step_dir, facing);
@@ -348,10 +383,10 @@ PlayerInput PlayerAutonomy::step(const TileMap& map, const Player& player, f32 d
 
     f32 angle = std::atan2(to_target.y, to_target.x) + curve_ * clamp(dist / 3.5f, 0.0f, 1.0f);
     Vec2 steer{std::cos(angle), std::sin(angle)};
-    if (dist > 0.6f && !can_stand(map, pos + steer * 0.55f, Player::kRadius)) {
+    if (dist > 0.6f && !can_stand(map, pos + steer * 0.55f, player.body_radius(), player.body_height())) {
         for (f32 offset : {0.45f, -0.45f, 0.90f, -0.90f, 1.35f, -1.35f}) {
             const Vec2 alt{std::cos(angle + offset), std::sin(angle + offset)};
-            if (can_stand(map, pos + alt * 0.55f, Player::kRadius)) {
+            if (can_stand(map, pos + alt * 0.55f, player.body_radius(), player.body_height())) {
                 steer = alt;
                 break;
             }

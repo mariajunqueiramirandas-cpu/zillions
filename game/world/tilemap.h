@@ -7,6 +7,7 @@
 
 #include "core/base.h"
 #include "math/vec.h"
+#include "world/scenery.h"
 
 namespace zl {
 
@@ -36,6 +37,7 @@ enum : u8 {
 // Open land sits on a small number of flat height levels separated by cliffs.
 // Level 0 is the lowland around the lakes; higher levels are plateaus.
 inline constexpr int kHeightLevels = 3;
+inline constexpr f32 kTerrainLevelHeight = 1.6f;  // world units per terrace
 
 inline constexpr int kTerrainCount = static_cast<int>(Terrain::Count);
 inline constexpr int kResourceCount = static_cast<int>(Resource::Count);
@@ -82,6 +84,7 @@ struct TileMap {
     std::vector<u8> level;        // height level, 0 .. kHeightLevels - 1
 
     MapStats stats;
+    Scenery scenery;
 
     i32 tile_count() const { return width * height; }
     i32 index(i32 x, i32 y) const { return y * width + x; }

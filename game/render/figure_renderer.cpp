@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <string>
 
 #include "gfx/gl.h"
 
@@ -55,30 +56,36 @@ uniform vec4 uView;  // xy: clip scale, zw: clip offset
 out vec2 vLocal;     // position relative to the figure's ground point, in tiles
 flat out vec4 vInfo; // part count, waterline, time, marker
 flat out int vRow;
+flat out vec3 vAnchor;
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     vec2 world = aRect.xy + aRect.zw * corner;
     vLocal = world - aFigure.xy;
     vInfo = vec4(aFigure.zw, aExtra.yz);
     vRow = int(aExtra.x + 0.5);
+    vAnchor = vec3(aFigure.xy, aExtra.w);
     gl_Position = vec4(world * uView.xy + uView.zw, 0.0, 1.0);
 }
 )";
 
-const char* kFragment = R"(#version 330 core
+const char* kFragment = R"(
 uniform sampler2D uParts;
 uniform float uPixel;     // tiles per screen pixel
 uniform vec2 uShadow;     // screen offset of a shadow per tile of height
 uniform vec2 uProjection; // depth and up scales, shared with the CPU projection
 uniform vec3 uGround;     // ripple radius, marker radius, marker radius in pixels
 uniform bool uPainted;
+uniform bool uIsometric;
+uniform float uSceneDepthScale;
+uniform mat2 uInverseRotation;
 in vec2 vLocal;
 flat in vec4 vInfo;
 flat in int vRow;
+flat in vec3 vAnchor;
 out vec4 oColor;
 
 // The light and the palette of the painted art (docs/art-direction.md).
-const vec3 LIGHT = vec3(-0.5013, -0.6216, 0.6016);
+uniform vec3 LIGHT;
 const vec3 SOOT = vec3(0.102, 0.086, 0.063);
 const vec3 BONE = vec3(0.847, 0.812, 0.706);
 const vec3 HAZE = vec3(0.56, 0.53, 0.47);
@@ -234,7 +241,20 @@ vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, ou
     return c;
 }
 
+vec4 sceneShadow(vec4 color, float depth) {
+    if (!uIsometric || !uShadows) return color;
+    vec2 plane = vLocal + vAnchor.xy;
+    float height = (-depth / uSceneDepthScale - plane.y * 1.732050808) * 0.5;
+    float sum = (plane.y + height * 0.866025404) / 0.353553391;
+    float difference = plane.x / 0.707106781;
+    vec2 position = uInverseRotation * vec2(sum + difference, sum - difference) * 0.5;
+    color.rgb *= mix(vec3(0.53, 0.58, 0.65), vec3(1.0), shadowVisibility(position, height, false));
+    return color;
+}
+
 void main() {
+    float sceneDepth = uIsometric ? vAnchor.z - vLocal.y * 1.732050808 * uSceneDepthScale : 0.0;
+    gl_FragDepth = sceneDepth * 0.5 + 0.5;
     int count = int(vInfo.x + 0.5);
     float water = vInfo.y;
     vec2 p = vLocal;
@@ -302,7 +322,7 @@ void main() {
     }
 
     if (first < 0) {
-        oColor = vec4(under * underAlpha, underAlpha);
+        oColor = sceneShadow(vec4(under * underAlpha, underAlpha), sceneDepth);
         return;
     }
 
@@ -336,7 +356,11 @@ void main() {
     color = mix(color, HAZE, 0.035);
 
     float alpha = clamp(0.5 - inside / aa, 0.0, 1.0);
-    oColor = vec4(color * alpha + under * underAlpha * (1.0 - alpha), alpha + underAlpha * (1.0 - alpha));
+    if (uIsometric) {
+        sceneDepth = vAnchor.z - (zFirst - water * uProjection.x) * uSceneDepthScale;
+        gl_FragDepth = sceneDepth * 0.5 + 0.5;
+    }
+    oColor = sceneShadow(vec4(color * alpha + under * underAlpha * (1.0 - alpha), alpha + underAlpha * (1.0 - alpha)), sceneDepth);
 }
 )";
 
@@ -349,7 +373,8 @@ FigureRenderer::~FigureRenderer() {
 }
 
 void FigureRenderer::init() {
-    shader_.compile("figure", kVertex, kFragment);
+    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kFragment;
+    shader_.compile("figure", kVertex, fragment.c_str());
     shader_.bind();
     glUniform1i(shader_.uniform("uParts"), 0);
     glUniform2f(shader_.uniform("uShadow"), kShadowOnScreen.x, kShadowOnScreen.y);
@@ -382,13 +407,22 @@ void FigureRenderer::init() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 }
 
-void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& camera) {
+void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& camera,
+                          const IsometricCamera* world_camera, const ShadowView* shadows, f32 depth_scale) {
     draw_calls_ = 0;
     if (count == 0) return;
     const bool painted = style_ == FigureStyle::Painted;
     const f32 raster_zoom = painted ? std::min(camera.zoom, kPaintedPixelsPerTile) : camera.zoom;
     const f32 pixel = 1.0f / raster_zoom;
     const Vec2 view_lo = camera.visible_min(), view_hi = camera.visible_max();
+    const f32 up_scale = world_camera ? IsometricCamera::kZ : kFigureUpScale;
+    const f32 ground_scale = world_camera ? 0.5f : kFigureDepthScale;
+    const Vec2 shadow = world_camera ? world_camera->project(ShadowView{}.light * -1.0f) + Vec2{0, up_scale} : kShadowOnScreen;
+    const auto project_part = [&](Vec3 p) {
+        if (!world_camera) return p;
+        const Vec2 r = world_camera->rotate({p.x, p.y});
+        return Vec3{(r.x - r.y) * IsometricCamera::kX, (r.x + r.y) * IsometricCamera::kX, p.z};
+    };
 
     std::vector<FigureInstance> instances;
     instances.reserve(count);
@@ -401,7 +435,8 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
         // A wading figure stands on the bed, so it sits lower on the screen
         // and the water cuts it off where the map's surface is.
         const f32 water = std::max(figure.waterline, 0.0f);
-        const f32 sink = water * kFigureUpScale;
+        const f32 sink = water * up_scale;
+        const Vec2 standing = world_camera ? world_camera->project(item.position, item.height) : item.position;
 
         const size_t row_start = texels_.size();
         texels_.resize(row_start + static_cast<size_t>(kRowTexels) * 4, 0.0f);
@@ -415,12 +450,14 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
         };
         for (i32 i = 0; i < parts; ++i) {
             const FigurePart& part = figure.parts[static_cast<size_t>(i)];
-            Vec2 a = figure_to_screen(part.a), b = figure_to_screen(part.b);
+            const Vec3 pa = project_part(part.a), pb = project_part(part.b);
+            Vec2 a{pa.x, pa.y * ground_scale - pa.z * up_scale};
+            Vec2 b{pb.x, pb.y * ground_scale - pb.z * up_scale};
             a.y += sink;
             b.y += sink;
             const f32 texel[16] = {
                 a.x, a.y, b.x, b.y,
-                part.ra, part.rb, figure_depth(part.a), figure_depth(part.b),
+                part.ra, part.rb, pa.y * up_scale + pa.z * ground_scale, pb.y * up_scale + pb.z * ground_scale,
                 part.a.z, part.b.z, part.roundness, static_cast<f32>(static_cast<int>(part.material) + 8 * part.flags),
                 static_cast<f32>(part.color.r) / 255.0f, static_cast<f32>(part.color.g) / 255.0f, static_cast<f32>(part.color.b) / 255.0f, static_cast<f32>(part.group),
             };
@@ -429,8 +466,8 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
             grow(b, part.rb);
             // And the shadow it throws, with room for its soft edge.
             const f32 ha = std::max(part.a.z - water, 0.0f), hb = std::max(part.b.z - water, 0.0f);
-            grow(a + kShadowOnScreen * ha, part.ra + 0.02f + 0.08f * ha);
-            grow(b + kShadowOnScreen * hb, part.rb + 0.02f + 0.08f * hb);
+            grow(a + shadow * ha, part.ra + 0.02f + 0.08f * ha);
+            grow(b + shadow * hb, part.rb + 0.02f + 0.08f * hb);
         }
         if (water > 0.0f) {
             grow({0.0f, 0.0f}, kRippleRadius);
@@ -449,7 +486,7 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
             hi = {std::ceil(hi.x * raster_zoom) * pixel, std::ceil(hi.y * raster_zoom) * pixel};
         }
 
-        const Vec2 world_lo = item.position + lo, world_hi = item.position + hi;
+        const Vec2 world_lo = standing + lo, world_hi = standing + hi;
         if (world_hi.x < view_lo.x || world_hi.y < view_lo.y || world_lo.x > view_hi.x || world_lo.y > view_hi.y) {
             texels_.resize(row_start);  // off screen
             continue;
@@ -459,14 +496,14 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
         instance.y = world_lo.y;
         instance.w = hi.x - lo.x;
         instance.h = hi.y - lo.y;
-        instance.ox = item.position.x;
-        instance.oy = item.position.y;
+        instance.ox = standing.x;
+        instance.oy = standing.y;
         instance.parts = static_cast<f32>(parts);
         instance.waterline = water;
         instance.row = static_cast<f32>(instances.size());
         instance.time = item.time;
         instance.marker = item.marker;
-        instance.unused = 0.0f;
+        instance.unused = world_camera ? -world_camera->depth(item.position, item.height) * depth_scale : 0.0f;
         instances.push_back(instance);
     }
     if (instances.empty()) return;
@@ -529,6 +566,25 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(wanted) * static_cast<GLsizeiptr>(sizeof(FigureInstance)), use_atlas ? baked.data() : instances.data());
 
     shader_.bind();
+    glUniform2f(shader_.uniform("uProjection"), ground_scale, up_scale);
+    glUniform2f(shader_.uniform("uShadow"), shadow.x, shadow.y);
+    if (world_camera) {
+        const Vec2 light{ShadowView{}.light};
+        const Vec2 p = world_camera->project(light, 1.0f);
+        const f32 d = world_camera->depth(light, 1.0f);
+        const f32 inverse_length = 1.0f / std::sqrt(dot(light, light) + 1.0f);
+        glUniform3f(shader_.uniform("LIGHT"), p.x * inverse_length, p.y * inverse_length, d * inverse_length);
+        const Vec2 x = world_camera->unrotate({1, 0}), y = world_camera->unrotate({0, 1});
+        const f32 inverse[] = {x.x, x.y, y.x, y.y};
+        glUniformMatrix2fv(shader_.uniform("uInverseRotation"), 1, GL_FALSE, inverse);
+    } else {
+        glUniform3f(shader_.uniform("LIGHT"), -0.5013f, -0.6216f, 0.6016f);
+    }
+    glUniform1i(shader_.uniform("uIsometric"), world_camera && !use_atlas);
+    glUniform1f(shader_.uniform("uSceneDepthScale"), depth_scale);
+    bind_shadows(shader_, !use_atlas ? shadows : nullptr);
+    const GLboolean had_depth = glIsEnabled(GL_DEPTH_TEST);
+    if (use_atlas || !world_camera) glDisable(GL_DEPTH_TEST);
     Camera2D raster_camera = camera;
     if (use_atlas) {
         raster_camera.zoom = raster_zoom;
@@ -562,10 +618,18 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
             const f32 u1 = (source.x + source.w) * raster_zoom / static_cast<f32>(painted_.width());
             const f32 v1 = 1.0f - (source.y + source.h) * raster_zoom / static_cast<f32>(painted_.height());
             out[i] = {item.x, item.y, item.w, item.h, uv(u0), uv(v0), uv(u1), uv(v1), 0xFFFFFFFFu};
+            if (world_camera) {
+                out[i].depth = item.unused - 0.025f * depth_scale;
+                out[i].anchor = (item.oy - item.y) / item.h;
+                out[i].depth_span = item.h / (2.0f * IsometricCamera::kZ) * depth_scale;
+                out[i].ground_span = -item.h * (IsometricCamera::kDepthXY / IsometricCamera::kY) * depth_scale;
+            }
         }
-        sprites_.draw(wanted, camera, painted_.color_texture());
+        if (had_depth) glEnable(GL_DEPTH_TEST);
+        sprites_.draw(wanted, camera, painted_.color_texture(), shadows, world_camera, depth_scale);
         draw_calls_ = 2;
     }
+    if (had_depth) glEnable(GL_DEPTH_TEST);
 }
 
 }  // namespace zl

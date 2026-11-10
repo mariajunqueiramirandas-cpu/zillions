@@ -40,6 +40,14 @@ void Texture::create(const Image& image, TextureFilter filter, TextureWrap wrap,
     set_sampling(GL_TEXTURE_2D, filter, wrap);
 }
 
+void Texture::create_float(i32 width, i32 height, const f32* values) {
+    reset(GL_TEXTURE_2D);
+    width_ = width;
+    height_ = height;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width, height, 0, GL_RED, GL_FLOAT, values);
+    set_sampling(GL_TEXTURE_2D, TextureFilter::Linear, TextureWrap::Clamp);
+}
+
 void Texture::create_array(const std::vector<Image>& layers, TextureFilter filter, TextureWrap wrap) {
     ZL_CHECK(!layers.empty(), "texture array needs at least one layer");
     reset(GL_TEXTURE_2D_ARRAY);

@@ -1,4 +1,4 @@
-// Off-screen colour buffer, used for screenshots and live texture passes.
+// Off-screen colour and depth buffers, used for screenshots at arbitrary resolution.
 #pragma once
 
 #include "core/base.h"
@@ -27,6 +27,7 @@ public:
 private:
     u32 fbo_ = 0;
     u32 color_ = 0;
+    u32 depth_ = 0;
     i32 width_ = 0;
     i32 height_ = 0;
 };

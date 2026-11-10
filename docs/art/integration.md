@@ -1,5 +1,9 @@
 # Painted art in the viewer
 
+The current viewer projects this artwork isometrically; see the
+[current screenshots and rendering notes](../isometric.md). Images below record
+the original painted-art integration before the isometric conversion.
+
 The viewer loads the seven ground textures and forty scenery sprites at startup.
 It converts sprite PNGs from straight to premultiplied alpha exactly once, packs
 the fixed-size canvases into one atlas, and leaves water/noise data procedural.

@@ -17,6 +17,7 @@
 #include "core/jobs.h"
 #include "core/rng.h"
 #include "gfx/camera2d.h"
+#include "gfx/isometric_camera.h"
 #include "math/noise.h"
 #include "render/terrain_art.h"
 #include "world/mapgen.h"
@@ -137,6 +138,54 @@ TEST(camera_round_trips_and_zooms_about_a_point) {
     camera.zoom_at(anchor, 1.7f, 1.0f, 128.0f);
     const Vec2 after = camera.screen_to_world(anchor);
     CHECK(std::fabs(before.x - after.x) < 1.0e-2f && std::fabs(before.y - after.y) < 1.0e-2f);
+}
+
+TEST(isometric_projection_rotation_height_and_screen_movement) {
+    IsometricCamera camera;
+    camera.center = {147.3f, 93.8f};
+    camera.center_height = 3.25f;
+    camera.viewport = {1379, 831};
+    for (const f32 zoom : {1.0f, 16.0f, 128.0f}) {
+        camera.zoom = zoom;
+        for (i32 turn = 0; turn < 4; ++turn) {
+            for (const Vec2 world : {Vec2{0, 0}, Vec2{123.75f, 179.1f}, Vec2{4096, 4096}}) {
+                for (const f32 height : {0.0f, 3.25f, 45.0f}) {
+                    const Vec2 back = camera.screen_to_world(camera.world_to_screen(world, height), height);
+                    CHECK(length(back - world) < 0.002f);
+                }
+            }
+            CHECK(length(camera.world_to_screen(camera.center, camera.center_height) - camera.viewport * 0.5f) < 0.001f);
+            const Vec2 ground = camera.world_to_screen({150, 100}, 2);
+            const Vec2 raised = camera.world_to_screen({150, 100}, 5);
+            CHECK(std::fabs(ground.x - raised.x) < 0.001f);
+            CHECK(std::fabs(ground.y - raised.y - 3 * IsometricCamera::kZ * zoom) < 0.01f);
+            CHECK(camera.depth({150, 100}, 5) > camera.depth({150, 100}, 2));
+
+            // Keyboard and drag movement retain screen directions in all views.
+            const Vec2 pixels{137, -83};
+            const Vec2 delta = camera.screen_delta_to_world(pixels);
+            const Vec2 screen_delta = camera.world_to_screen(camera.center + delta, camera.center_height) - camera.viewport * 0.5f;
+            CHECK(length(screen_delta - pixels) < 0.01f);
+
+            // Zoom an elevated point about an off-centre mouse position.
+            const Vec2 cursor{1047, 287};
+            const Vec2 before = camera.screen_to_world(cursor, 7.0f);
+            const f32 saved = camera.zoom;
+            camera.zoom *= 1.7f;
+            camera.center += before - camera.screen_to_world(cursor, 7.0f);
+            CHECK(length(camera.world_to_screen(before, 7.0f) - cursor) < 0.05f);
+            camera.zoom = saved;
+            camera.turn(1);
+        }
+        CHECK(camera.rotation == 0);
+    }
+    const Vec2 diagonal = camera.project({1, 0}) - camera.project({0, 1});
+    const Vec2 vertical = camera.project({1, 1});
+    CHECK(std::fabs(std::fabs(diagonal.x / vertical.y) - 2.0f) < 0.0001f);
+    camera.turn(-1);
+    CHECK(camera.rotation == 3);
+    camera.turn(9);
+    CHECK(camera.rotation == 0);
 }
 
 TEST(camera_edge_pan_and_mode_switch_animate_cleanly) {

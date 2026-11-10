@@ -25,10 +25,9 @@ inline constexpr f32 kSprintSpeed = 5.2f;
 inline constexpr f32 kWadeSlowdown = 0.55f;
 inline constexpr f32 kWadeDepth = 0.24f;  // metres of water in a ford
 
-// Whether a body of the given radius (in tiles) can stand at `position`: every
-// tile it touches must be walkable and reachable from the tile under its
-// centre without crossing a cliff (see TileMap::can_step).
-bool can_stand(const TileMap& map, Vec2 position, f32 radius);
+// Grounded cylindrical body, in tiles. Terrain edges and cliffs remain solid;
+// generated scenery uses its actual trunk/rock footprint and vertical extent.
+bool can_stand(const TileMap& map, Vec2 position, f32 radius, f32 height = 1.75f * kTilesPerMetre);
 
 class Player {
 public:
@@ -48,6 +47,8 @@ public:
 
     Vec2 position() const { return position_; }
     Vec2 velocity() const { return velocity_; }  // tiles per second, as actually moved
+    f32 body_radius() const { return kRadius * look.height * look.build; }
+    f32 body_height() const { return 1.75f * kTilesPerMetre * look.height; }
     const HumanMotion& motion() const { return motion_; }
     // Overrides the pose, for posed screenshots.
     void set_motion(const HumanMotion& motion) { motion_ = previous_motion_ = motion; }

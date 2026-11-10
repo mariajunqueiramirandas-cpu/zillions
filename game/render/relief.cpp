@@ -24,7 +24,7 @@ constexpr f32 kDiag = 1.41421356f;
 // faint roll that keeps flat ground from looking dead.
 constexpr f32 kPlainHeight = 6.0f;
 // Height of one level above the next, in world units.
-constexpr f32 kLevelHeight = 1.6f;
+constexpr f32 kLevelHeight = kTerrainLevelHeight;
 // Half-width of a cliff face, as a fraction of the blend between two levels.
 constexpr f32 kCliffWidth = 0.20f;
 
@@ -415,6 +415,7 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
             }
         }
     });
+    relief.heights = std::move(height);
     return relief;
 }
 

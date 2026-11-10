@@ -9,11 +9,13 @@ namespace zl {
 RenderTarget::~RenderTarget() {
     if (fbo_) glDeleteFramebuffers(1, &fbo_);
     if (color_) glDeleteTextures(1, &color_);
+    if (depth_) glDeleteRenderbuffers(1, &depth_);
 }
 
 void RenderTarget::create(i32 width, i32 height) {
     if (fbo_) glDeleteFramebuffers(1, &fbo_);
     if (color_) glDeleteTextures(1, &color_);
+    if (depth_) glDeleteRenderbuffers(1, &depth_);
     width_ = width;
     height_ = height;
 
@@ -28,6 +30,10 @@ void RenderTarget::create(i32 width, i32 height) {
     glGenFramebuffers(1, &fbo_);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_, 0);
+    glGenRenderbuffers(1, &depth_);
+    glBindRenderbuffer(GL_RENDERBUFFER, depth_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_);
     ZL_CHECK(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "render target is incomplete");
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

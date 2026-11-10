@@ -20,6 +20,7 @@ struct FigureDraw {
     Vec2 position{0.0f, 0.0f};  // where it stands on the map, in tiles
     f32 time = 0.0f;            // seconds; moves the ripples round a wading figure
     f32 marker = 0.0f;          // 0..1: a ring on the ground to find the figure by from afar
+    f32 height = 0.0f;          // terrain surface in tiles, for the isometric view
 };
 
 class FigureRenderer {
@@ -34,8 +35,9 @@ public:
     FigureStyle style() const { return style_; }
     u32 draw_calls() const { return draw_calls_; }
 
-    // Draws the figures in the order given, so pass them north to south.
-    void draw(const FigureDraw* figures, u32 count, const Camera2D& camera);
+    // Draws the figures in the order given; pass them back to front in the view.
+    void draw(const FigureDraw* figures, u32 count, const Camera2D& camera,
+              const IsometricCamera* world_camera = nullptr, const ShadowView* shadows = nullptr, f32 depth_scale = 1.0f);
 
 private:
     Shader shader_;

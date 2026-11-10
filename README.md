@@ -12,12 +12,15 @@ about choosing which chokepoints to hold. See [the design notes](docs/design.md)
 The engine, map generator and a playable human character are built. The colony,
 economy and horde are still to build.
 
-![A generated map](docs/screenshots/map-seed-7.jpg)
+The world uses a 2:1 isometric view with displaced terrain, raised plateaus,
+sloping ramps, depth-tested scenery, and soft cast shadows from a world-space sun. **Q / E** turn the view by 90° around
+the terrain at the centre of the screen. See the [isometric viewer notes](docs/isometric.md).
+
+![An isometric generated map](docs/screenshots/isometric-world.png)
 
 | | |
 |---|---|
-| ![Mountains](docs/screenshots/mountains.jpg) | ![Cliffs and ramps](docs/screenshots/cliffs-ramps.jpg) |
-| ![Start area](docs/screenshots/start-area.jpg) | ![Open country](docs/screenshots/river-forest.jpg) |
+| ![Isometric mountains and cliffs](docs/screenshots/isometric-detail-0.png) | ![The same terrain rotated 90 degrees](docs/screenshots/isometric-detail-90.png) |
 
 ## Generated artwork
 
@@ -74,6 +77,7 @@ which need no windowing system or GPU.
 zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no-vsync]
          [--assets DIR]
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
+         [--rotation 0|90|180|270] [--no-shadows]
          [--no-character] [--player X Y] [--heading DEG] [--speed M --phase P]
          [--look N] [--hood] [--time SECONDS] [--character-sheet FILE]
          [--character-style painted|smooth]
@@ -83,6 +87,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 
 | Input | Action |
 |---|---|
+| Q / E | rotate the world 90° counterclockwise / clockwise |
 | WASD / arrows | move the character (Shift: sprint, Ctrl: stroll); pan in management mode |
 | Space | switch between character-follow mode and management mode (autonomous character + city-builder camera) |
 | window borders / right- or middle-drag | pan in management mode |
@@ -93,6 +98,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
+| F3 | inspect object collision footprints and height volumes |
 | F5 | reload ground textures and sprites without changing the map or camera |
 | F6 | switch the character between painted sprite and smooth rendering |
 
@@ -100,6 +106,12 @@ The painted art is read from `--assets DIR`, or by default from `./assets`, or
 failing that from the `assets` folder of the source tree the binary was built
 from. If the ground textures or the sprites cannot be loaded, the viewer says
 why and draws that group in code instead.
+
+Trees, boulders and deposits have world-space collision volumes shared with
+their rendered placements. Characters slide around trunks and rounded rock
+footprints; canopies and small ground cover remain walkable. See the
+[collision notes and contact previews](docs/collision.md). `--colliders` enables
+the same inspection overlay as F3 in screenshots.
 
 F5 repeats the same asset lookup, so edits can be checked without restarting.
 With automatic discovery, a local `assets` directory takes precedence even if
@@ -166,7 +178,7 @@ For PNGs without GIF encoding, use the game directly:
 engine/core      types, RNG and hashing, job system, clock, images
 engine/math      vectors, simplex / fBm / ridged noise
 engine/platform  window, OpenGL context, input (GLFW)
-engine/gfx       shaders, textures, render targets, 2D camera, sprite batch
+engine/gfx       shaders, textures, colour/depth targets, isometric and 2D cameras, sprite batch
 game/world       tile map, map generator, CPU preview        (headless)
 game/actor       human rig, gait, looks and player controller (headless)
 game/render      terrain and figure shaders, relief, art loading and placeholders
@@ -181,17 +193,24 @@ simulation can run in tests, tools and (later) a server.
 
 ## Engine notes
 
-- **Up to five draw calls with a painted character, four in smooth mode, two
-  for the map alone.** The ground is
-  one full-screen shader pass: each pixel looks up its four nearest tiles in a
-  data texture and blends their materials, so cost depends on screen
-  resolution, not map size. Everything
-  standing on the ground is one instanced draw: 28 bytes per sprite written
-  straight into mapped GPU memory, quad corners derived from `gl_VertexID`.
-  With the character, scenery is split north and south of its feet. Painted
-  mode first renders the visible poses to a GPU atlas at up to 64 pixels per
-  tile, then composites them in one sprite batch between those slices. Smooth
-  mode uses one figure pass instead. Empty scenery slices are skipped.
+- **Instanced terrain and scenery.** Visible terrain chunks use a height-displaced
+  mesh with distance-dependent tessellation; a second draw closes the map edges
+  with rock faces. Scenery uses one instanced draw with 44 bytes per sprite,
+  including upright and contact-shadow depth. Quad corners come from `gl_VertexID`.
+  With a character, scenery is split before and after its rotated ground depth.
+  Painted characters render into a live 64-pixel-per-tile GPU atlas and composite
+  between those slices; smooth mode uses a direct figure pass instead.
+- **Height and occlusion.** A full-precision height texture drives geometry,
+  scenery anchors, and terrain picking. Live windows and screenshot targets both
+  have depth buffers. Four scenery orders handle camera rotation, and terrain
+  hides objects on the far sides of cliffs and mountains. Character geometry,
+  shadows, and movement use the same isometric camera.
+- **Directional shadows.** A cached 2048² floating-point sun depth map includes
+  terrain and alpha-cutout trees, bushes, boulders and deposits, including offscreen
+  casters. Terrain, water and characters receive soft filtered shadows while
+  retaining cool ambient light. Shadow geometry refreshes after camera or art
+  changes. A stationary map-only view uses up to three visible draws; refreshing
+  shadows adds two depth draws. `--no-shadows` makes reproducible comparisons.
 - **Job system.** A persistent thread pool with a blocking `parallel_for`;
   chunks are claimed with a single atomic add.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is
