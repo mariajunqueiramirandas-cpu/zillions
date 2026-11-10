@@ -1,0 +1,1306 @@
+{
+  "authoring_pixels_per_tile": 32,
+  "sprite_alpha": "straight; premultiply once when uploading to the renderer",
+  "ground": [
+    {
+      "path": "ground/grass.png",
+      "source": "source/ground.png",
+      "source_rect": [
+        3,
+        3,
+        441,
+        441
+      ],
+      "size": [
+        256,
+        256
+      ]
+    },
+    {
+      "path": "ground/forest.png",
+      "source": "source/ground.png",
+      "source_rect": [
+        447,
+        3,
+        884,
+        441
+      ],
+      "size": [
+        256,
+        256
+      ]
+    },
+    {
+      "path": "ground/dirt.png",
+      "source": "source/ground.png",
+      "source_rect": [
+        890,
+        3,
+        1327,
+        441
+      ],
+      "size": [
+        256,
+        256
+      ]
+    },
+    {
+      "path": "ground/rocks.png",
+      "source": "source/ground.png",
+      "source_rect": [
+        1333,
+        3,
+        1771,
+        441
+      ],
+      "size": [
+        256,
+        256
+      ]
+    },
+    {
+      "path": "ground/sand.png",
+      "source": "source/ground.png",
+      "source_rect": [
+        3,
+        447,
+        441,
+        884
+      ],
+      "size": [
+        256,
+        256
+      ]
+    },
+    {
+      "path": "ground/mountain.png",
+      "source": "source/ground.png",
+      "source_rect": [
+        447,
+        447,
+        884,
+        884
+      ],
+      "size": [
+        256,
+        256
+      ]
+    },
+    {
+      "path": "ground/shallows.png",
+      "source": "source/ground.png",
+      "source_rect": [
+        890,
+        447,
+        1327,
+        884
+      ],
+      "size": [
+        256,
+        256
+      ]
+    }
+  ],
+  "sprites": [
+    {
+      "path": "sprites/broadleaf_0.png",
+      "family": "broadleaf",
+      "variant": 0,
+      "size": [
+        64,
+        76
+      ],
+      "anchor": [
+        32,
+        66
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        0,
+        0,
+        256,
+        512
+      ],
+      "content_rect": [
+        5,
+        120,
+        256,
+        424
+      ],
+      "source_anchor": [
+        123.0,
+        294
+      ]
+    },
+    {
+      "path": "sprites/broadleaf_1.png",
+      "family": "broadleaf",
+      "variant": 1,
+      "size": [
+        64,
+        76
+      ],
+      "anchor": [
+        32,
+        66
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        256,
+        0,
+        512,
+        512
+      ],
+      "content_rect": [
+        5,
+        120,
+        256,
+        424
+      ],
+      "source_anchor": [
+        123.0,
+        294
+      ]
+    },
+    {
+      "path": "sprites/broadleaf_2.png",
+      "family": "broadleaf",
+      "variant": 2,
+      "size": [
+        64,
+        76
+      ],
+      "anchor": [
+        32,
+        66
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        512,
+        0,
+        768,
+        512
+      ],
+      "content_rect": [
+        1,
+        112,
+        256,
+        424
+      ],
+      "source_anchor": [
+        127.0,
+        302
+      ]
+    },
+    {
+      "path": "sprites/broadleaf_3.png",
+      "family": "broadleaf",
+      "variant": 3,
+      "size": [
+        64,
+        76
+      ],
+      "anchor": [
+        32,
+        66
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        768,
+        0,
+        1024,
+        512
+      ],
+      "content_rect": [
+        1,
+        140,
+        248,
+        424
+      ],
+      "source_anchor": [
+        127.0,
+        274
+      ]
+    },
+    {
+      "path": "sprites/broadleaf_4.png",
+      "family": "broadleaf",
+      "variant": 4,
+      "size": [
+        64,
+        76
+      ],
+      "anchor": [
+        32,
+        66
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        1024,
+        0,
+        1280,
+        512
+      ],
+      "content_rect": [
+        5,
+        133,
+        252,
+        421
+      ],
+      "source_anchor": [
+        123.0,
+        281
+      ]
+    },
+    {
+      "path": "sprites/broadleaf_5.png",
+      "family": "broadleaf",
+      "variant": 5,
+      "size": [
+        64,
+        76
+      ],
+      "anchor": [
+        32,
+        66
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        1280,
+        0,
+        1536,
+        512
+      ],
+      "content_rect": [
+        4,
+        145,
+        251,
+        420
+      ],
+      "source_anchor": [
+        124.0,
+        269
+      ]
+    },
+    {
+      "path": "sprites/conifer_0.png",
+      "family": "conifer",
+      "variant": 0,
+      "size": [
+        44,
+        80
+      ],
+      "anchor": [
+        22,
+        71
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        0,
+        512,
+        256,
+        1024
+      ],
+      "content_rect": [
+        39,
+        76,
+        221,
+        440
+      ],
+      "source_anchor": [
+        89.0,
+        354
+      ]
+    },
+    {
+      "path": "sprites/conifer_1.png",
+      "family": "conifer",
+      "variant": 1,
+      "size": [
+        44,
+        80
+      ],
+      "anchor": [
+        22,
+        71
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        256,
+        512,
+        512,
+        1024
+      ],
+      "content_rect": [
+        34,
+        101,
+        219,
+        438
+      ],
+      "source_anchor": [
+        94.0,
+        329
+      ]
+    },
+    {
+      "path": "sprites/conifer_2.png",
+      "family": "conifer",
+      "variant": 2,
+      "size": [
+        44,
+        80
+      ],
+      "anchor": [
+        22,
+        71
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        512,
+        512,
+        768,
+        1024
+      ],
+      "content_rect": [
+        25,
+        78,
+        231,
+        440
+      ],
+      "source_anchor": [
+        103.0,
+        352
+      ]
+    },
+    {
+      "path": "sprites/conifer_3.png",
+      "family": "conifer",
+      "variant": 3,
+      "size": [
+        44,
+        80
+      ],
+      "anchor": [
+        22,
+        71
+      ],
+      "source": "source/trees.png",
+      "source_rect": [
+        768,
+        512,
+        1024,
+        1024
+      ],
+      "content_rect": [
+        35,
+        98,
+        218,
+        441
+      ],
+      "source_anchor": [
+        93.0,
+        332
+      ]
+    },
+    {
+      "path": "sprites/bush_0.png",
+      "family": "bush",
+      "variant": 0,
+      "size": [
+        34,
+        26
+      ],
+      "anchor": [
+        17,
+        20
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        0,
+        0,
+        280,
+        300
+      ],
+      "content_rect": [
+        20,
+        112,
+        275,
+        262
+      ],
+      "source_anchor": [
+        127.5,
+        138.0
+      ]
+    },
+    {
+      "path": "sprites/bush_1.png",
+      "family": "bush",
+      "variant": 1,
+      "size": [
+        34,
+        26
+      ],
+      "anchor": [
+        17,
+        20
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        280,
+        0,
+        561,
+        300
+      ],
+      "content_rect": [
+        19,
+        109,
+        267,
+        260
+      ],
+      "source_anchor": [
+        124.0,
+        138.92000000000002
+      ]
+    },
+    {
+      "path": "sprites/bush_2.png",
+      "family": "bush",
+      "variant": 2,
+      "size": [
+        34,
+        26
+      ],
+      "anchor": [
+        17,
+        20
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        561,
+        0,
+        842,
+        300
+      ],
+      "content_rect": [
+        11,
+        102,
+        273,
+        263
+      ],
+      "source_anchor": [
+        131.0,
+        148.12
+      ]
+    },
+    {
+      "path": "sprites/stone_0.png",
+      "family": "stone",
+      "variant": 0,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        0,
+        0,
+        314,
+        314
+      ],
+      "content_rect": [
+        43,
+        116,
+        300,
+        312
+      ],
+      "source_anchor": [
+        128.5,
+        162.67999999999998
+      ]
+    },
+    {
+      "path": "sprites/stone_1.png",
+      "family": "stone",
+      "variant": 1,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        314,
+        0,
+        627,
+        314
+      ],
+      "content_rect": [
+        41,
+        110,
+        296,
+        301
+      ],
+      "source_anchor": [
+        127.5,
+        158.53
+      ]
+    },
+    {
+      "path": "sprites/stone_2.png",
+      "family": "stone",
+      "variant": 2,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        627,
+        0,
+        940,
+        314
+      ],
+      "content_rect": [
+        24,
+        105,
+        278,
+        312
+      ],
+      "source_anchor": [
+        127.0,
+        171.81
+      ]
+    },
+    {
+      "path": "sprites/iron_0.png",
+      "family": "iron",
+      "variant": 0,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        0,
+        314,
+        314,
+        627
+      ],
+      "content_rect": [
+        41,
+        81,
+        295,
+        285
+      ],
+      "source_anchor": [
+        127.0,
+        169.32
+      ]
+    },
+    {
+      "path": "sprites/iron_1.png",
+      "family": "iron",
+      "variant": 1,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        314,
+        314,
+        627,
+        627
+      ],
+      "content_rect": [
+        36,
+        83,
+        295,
+        279
+      ],
+      "source_anchor": [
+        129.5,
+        162.67999999999998
+      ]
+    },
+    {
+      "path": "sprites/iron_2.png",
+      "family": "iron",
+      "variant": 2,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        627,
+        314,
+        940,
+        627
+      ],
+      "content_rect": [
+        20,
+        80,
+        280,
+        286
+      ],
+      "source_anchor": [
+        130.0,
+        170.98
+      ]
+    },
+    {
+      "path": "sprites/gold_0.png",
+      "family": "gold",
+      "variant": 0,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        0,
+        627,
+        314,
+        940
+      ],
+      "content_rect": [
+        39,
+        59,
+        300,
+        262
+      ],
+      "source_anchor": [
+        130.5,
+        168.48999999999998
+      ]
+    },
+    {
+      "path": "sprites/gold_1.png",
+      "family": "gold",
+      "variant": 1,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        314,
+        627,
+        627,
+        940
+      ],
+      "content_rect": [
+        40,
+        58,
+        297,
+        254
+      ],
+      "source_anchor": [
+        128.5,
+        162.67999999999998
+      ]
+    },
+    {
+      "path": "sprites/gold_2.png",
+      "family": "gold",
+      "variant": 2,
+      "size": [
+        46,
+        40
+      ],
+      "anchor": [
+        23,
+        27
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        627,
+        627,
+        940,
+        940
+      ],
+      "content_rect": [
+        21,
+        51,
+        282,
+        260
+      ],
+      "source_anchor": [
+        130.5,
+        173.47
+      ]
+    },
+    {
+      "path": "sprites/boulder_0.png",
+      "family": "boulder",
+      "variant": 0,
+      "size": [
+        46,
+        44
+      ],
+      "anchor": [
+        23,
+        31
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        0,
+        940,
+        314,
+        1254
+      ],
+      "content_rect": [
+        45,
+        50,
+        298,
+        263
+      ],
+      "source_anchor": [
+        126.5,
+        176.79
+      ]
+    },
+    {
+      "path": "sprites/boulder_1.png",
+      "family": "boulder",
+      "variant": 1,
+      "size": [
+        46,
+        44
+      ],
+      "anchor": [
+        23,
+        31
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        314,
+        940,
+        627,
+        1254
+      ],
+      "content_rect": [
+        37,
+        54,
+        292,
+        262
+      ],
+      "source_anchor": [
+        127.5,
+        172.64
+      ]
+    },
+    {
+      "path": "sprites/boulder_2.png",
+      "family": "boulder",
+      "variant": 2,
+      "size": [
+        46,
+        44
+      ],
+      "anchor": [
+        23,
+        31
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        627,
+        940,
+        940,
+        1254
+      ],
+      "content_rect": [
+        20,
+        51,
+        282,
+        262
+      ],
+      "source_anchor": [
+        131.0,
+        175.13
+      ]
+    },
+    {
+      "path": "sprites/boulder_3.png",
+      "family": "boulder",
+      "variant": 3,
+      "size": [
+        46,
+        44
+      ],
+      "anchor": [
+        23,
+        31
+      ],
+      "source": "source/rocks.png",
+      "source_rect": [
+        940,
+        940,
+        1254,
+        1254
+      ],
+      "content_rect": [
+        25,
+        51,
+        283,
+        261
+      ],
+      "source_anchor": [
+        129.0,
+        174.29999999999998
+      ]
+    },
+    {
+      "path": "sprites/tuft_0.png",
+      "family": "tuft",
+      "variant": 0,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        0,
+        300,
+        280,
+        550
+      ],
+      "content_rect": [
+        33,
+        65,
+        261,
+        208
+      ],
+      "source_anchor": [
+        114.0,
+        140.14
+      ]
+    },
+    {
+      "path": "sprites/tuft_1.png",
+      "family": "tuft",
+      "variant": 1,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        280,
+        300,
+        561,
+        550
+      ],
+      "content_rect": [
+        31,
+        45,
+        254,
+        207
+      ],
+      "source_anchor": [
+        111.5,
+        158.76
+      ]
+    },
+    {
+      "path": "sprites/tuft_2.png",
+      "family": "tuft",
+      "variant": 2,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        561,
+        300,
+        842,
+        550
+      ],
+      "content_rect": [
+        47,
+        95,
+        255,
+        207
+      ],
+      "source_anchor": [
+        104.0,
+        109.75999999999999
+      ]
+    },
+    {
+      "path": "sprites/tuft_3.png",
+      "family": "tuft",
+      "variant": 3,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        842,
+        300,
+        1122,
+        550
+      ],
+      "content_rect": [
+        24,
+        56,
+        226,
+        207
+      ],
+      "source_anchor": [
+        101.0,
+        147.98
+      ]
+    },
+    {
+      "path": "sprites/flower_0.png",
+      "family": "flower",
+      "variant": 0,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        0,
+        550,
+        280,
+        780
+      ],
+      "content_rect": [
+        34,
+        57,
+        262,
+        207
+      ],
+      "source_anchor": [
+        114.0,
+        147.0
+      ]
+    },
+    {
+      "path": "sprites/flower_1.png",
+      "family": "flower",
+      "variant": 1,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        280,
+        550,
+        561,
+        780
+      ],
+      "content_rect": [
+        31,
+        39,
+        255,
+        207
+      ],
+      "source_anchor": [
+        112.0,
+        164.64
+      ]
+    },
+    {
+      "path": "sprites/flower_2.png",
+      "family": "flower",
+      "variant": 2,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        561,
+        550,
+        842,
+        780
+      ],
+      "content_rect": [
+        39,
+        64,
+        239,
+        207
+      ],
+      "source_anchor": [
+        100.0,
+        140.14
+      ]
+    },
+    {
+      "path": "sprites/flower_3.png",
+      "family": "flower",
+      "variant": 3,
+      "size": [
+        20,
+        16
+      ],
+      "anchor": [
+        10,
+        14
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        842,
+        550,
+        1122,
+        780
+      ],
+      "content_rect": [
+        29,
+        38,
+        241,
+        207
+      ],
+      "source_anchor": [
+        106.0,
+        165.62
+      ]
+    },
+    {
+      "path": "sprites/reed_0.png",
+      "family": "reed",
+      "variant": 0,
+      "size": [
+        20,
+        30
+      ],
+      "anchor": [
+        10,
+        28
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        0,
+        780,
+        280,
+        1180
+      ],
+      "content_rect": [
+        79,
+        42,
+        232,
+        343
+      ],
+      "source_anchor": [
+        76.5,
+        294.98
+      ]
+    },
+    {
+      "path": "sprites/reed_1.png",
+      "family": "reed",
+      "variant": 1,
+      "size": [
+        20,
+        30
+      ],
+      "anchor": [
+        10,
+        28
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        280,
+        780,
+        561,
+        1180
+      ],
+      "content_rect": [
+        67,
+        25,
+        239,
+        342
+      ],
+      "source_anchor": [
+        86.0,
+        310.65999999999997
+      ]
+    },
+    {
+      "path": "sprites/reed_2.png",
+      "family": "reed",
+      "variant": 2,
+      "size": [
+        20,
+        30
+      ],
+      "anchor": [
+        10,
+        28
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        561,
+        780,
+        842,
+        1180
+      ],
+      "content_rect": [
+        65,
+        51,
+        221,
+        342
+      ],
+      "source_anchor": [
+        78.0,
+        285.18
+      ]
+    },
+    {
+      "path": "sprites/pebble_0.png",
+      "family": "pebble",
+      "variant": 0,
+      "size": [
+        22,
+        14
+      ],
+      "anchor": [
+        11,
+        9
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        0,
+        1180,
+        280,
+        1402
+      ],
+      "content_rect": [
+        64,
+        67,
+        228,
+        147
+      ],
+      "source_anchor": [
+        82.0,
+        66.39999999999999
+      ]
+    },
+    {
+      "path": "sprites/pebble_1.png",
+      "family": "pebble",
+      "variant": 1,
+      "size": [
+        22,
+        14
+      ],
+      "anchor": [
+        11,
+        9
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        280,
+        1180,
+        561,
+        1402
+      ],
+      "content_rect": [
+        56,
+        74,
+        235,
+        146
+      ],
+      "source_anchor": [
+        89.5,
+        59.76
+      ]
+    },
+    {
+      "path": "sprites/pebble_2.png",
+      "family": "pebble",
+      "variant": 2,
+      "size": [
+        22,
+        14
+      ],
+      "anchor": [
+        11,
+        9
+      ],
+      "source": "source/plants.png",
+      "source_rect": [
+        561,
+        1180,
+        842,
+        1402
+      ],
+      "content_rect": [
+        52,
+        68,
+        214,
+        149
+      ],
+      "source_anchor": [
+        81.0,
+        67.22999999999999
+      ]
+    }
+  ]
+}

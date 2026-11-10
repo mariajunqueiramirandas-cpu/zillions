@@ -19,6 +19,16 @@ the horde are still to build.
 | ![Mountains](docs/screenshots/mountains.jpg) | ![Cliffs and ramps](docs/screenshots/cliffs-ramps.jpg) |
 | ![Start area](docs/screenshots/start-area.jpg) | ![Open country](docs/screenshots/river-forest.jpg) |
 
+## Generated artwork
+
+The [art showcase](docs/art/showcase.md) contains seven image-model ground
+textures and forty scenery sprites following the [art brief](docs/art-direction.md),
+with contact sheets at four zoom levels and tiled ground proofs. Files live in
+`assets/ground` and `assets/sprites`; the viewer still uses its procedural
+placeholders until image loading and shader palette integration are implemented.
+
+![Generated ground textures](docs/art/ground-swatches.png)
+
 ## Building
 
 Needs CMake 3.21+, a C++20 compiler and OpenGL 3.3. GLFW and stb are fetched at
@@ -96,9 +106,10 @@ simulation can run in tests, tools and (later) a server.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is
   stateless. A seed produces the same map on any number of threads (tested).
 - **Fixed timestep** scaffolding is in place for the simulation.
-- **No art files yet.** Ground textures and sprites are drawn in code at
-  start-up, as placeholders that can be swapped for real art later. The brief
-  for that art is in [docs/art-direction.md](docs/art-direction.md).
+- **Procedural runtime placeholders.** Ground textures and sprites are drawn
+  in code at start-up. The generated artwork in `assets/` is delivered for
+  review; loading it into the viewer is a separate step. The brief is in
+  [docs/art-direction.md](docs/art-direction.md).
 
 ## Map generation
 
