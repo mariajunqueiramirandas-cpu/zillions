@@ -509,9 +509,11 @@ void MapRenderer::build_decor(const TileMap& map) {
     const Scenery& scene = map.scenery.ready ? map.scenery : fallback;
     collision_geometry_ = scene.colliders;
     const SpriteSet* families[] = {&art_.broadleaf, &art_.conifer, &art_.bush, &art_.stone, &art_.iron, &art_.gold,
-                                   &art_.boulder, &art_.tuft, &art_.flower, &art_.pebble, &art_.reed};
+                                   &art_.boulder, &art_.tuft, &art_.flower, &art_.pebble, &art_.reed,
+                                   &art_.branch, &art_.stump, &art_.rubble, &art_.chest};
     decor_.reserve(scene.objects.size());
     for (const SceneryObject& object : scene.objects) {
+        if (!object.active) continue;
         const SpriteSet& set = *families[static_cast<size_t>(object.kind)];
         const SpriteDef& d = art_.defs[static_cast<size_t>(set.first) + object.variant % static_cast<u32>(set.count)];
         SpriteInstance sprite;
@@ -537,6 +539,28 @@ void MapRenderer::build_decor(const TileMap& map) {
             return pa.x + pa.y < pb.x + pb.y;
         });
     }
+}
+
+void MapRenderer::refresh_objects(const TileMap& map) {
+    Image ids(map.width, map.height);
+    for (size_t i = 0; i < ids.pixels.size(); ++i)
+        ids.pixels[i] = {static_cast<u8>(map.terrain[i]), static_cast<u8>(map.resource[i]), map.flags[i], map.level[i]};
+    tiles_.create(ids, TextureFilter::Nearest, TextureWrap::Clamp);
+    build_decor(map);
+    shadows_valid_ = false;
+}
+
+void MapRenderer::draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid) {
+    const auto& d=art_.defs[static_cast<size_t>(art_.chest.first)];
+    const Vec2 projected=camera.project(point,surface_height(point,camera.zoom));
+    SpriteInstance s{};
+    s.x=projected.x-d.anchor_x;s.y=projected.y-d.anchor_y;s.w=d.width;s.h=d.height;
+    s.u0=d.u0;s.v0=d.v0;s.u1=d.u1;s.v1=d.v1;
+    s.color=valid?pack_color(216,207,180,180):pack_color(200,83,65,180);
+    auto* out=batch_.begin(1);*out=s;
+    glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);
+    batch_.draw(1,camera.plane_camera(),sprites_);
+    glDepthMask(GL_TRUE);
 }
 
 f32 MapRenderer::ground_height(Vec2 position) const {

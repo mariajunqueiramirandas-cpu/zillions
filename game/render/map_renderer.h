@@ -47,6 +47,10 @@ public:
     // keeps its UVs and the map/camera need not be rebuilt when art changes.
     void reload_art(JobSystem& jobs, const char* asset_dir);
     void set_map(const TileMap& map, JobSystem& jobs);
+    // Terrain heights are unchanged by harvesting: refresh ids, scenery and
+    // shadow casters without regenerating expensive mountain relief.
+    void refresh_objects(const TileMap& map);
+    void draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid);
     void draw(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_ground(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_scenery(const IsometricCamera& camera, f32 depth_begin, f32 depth_end, const SeeThrough* reveal = nullptr);

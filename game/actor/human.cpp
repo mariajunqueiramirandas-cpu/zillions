@@ -133,8 +133,7 @@ FootPose gait_foot(f32 phase, const HumanGait& gait) {
 // Two-bone reach from `hip` to `ankle`, bending towards `bend`. If the ankle
 // is out of reach it is pulled in along the line to the hip, and the returned
 // offset says by how much so the rest of the foot can follow.
-Vec3 solve_leg(Vec3 hip, Vec3& ankle, Vec3 bend, Vec3& knee) {
-    const f32 upper = kThighLength, lower = kShinLength;
+Vec3 solve_leg(Vec3 hip, Vec3& ankle, Vec3 bend, Vec3& knee, f32 upper = kThighLength, f32 lower = kShinLength) {
     Vec3 line = ankle - hip;
     f32 reach = length(line);
     Vec3 shift{0, 0, 0};
@@ -169,6 +168,7 @@ struct Rig {
     Vec3 swing;           // where loose things are thrown, metres in the body frame
     bool blink = false;
     f32 arm_grip = 0.0f;
+    Vec3 tool_grip, tool_axis;
 };
 
 Rig pose(const HumanLook& look, const HumanMotion& m) {
@@ -329,6 +329,28 @@ Rig pose(const HumanLook& look, const HumanMotion& m) {
         rig.thumb_dir[i] = thumbward;
     }
 
+    if (m.tool != HumanTool::None || m.work > 0) {
+        const float pwork = fract(m.work_phase);
+        const float swing_angle = pwork < 0.72f ? lerp(-0.8f, 1.20f, smoothstep(0.12f, 0.72f, pwork))
+                                              : lerp(1.20f, -0.8f, smoothstep(0.72f, 1.0f, pwork));
+        const float angle = lerp(0.35f, swing_angle, saturate(m.work));
+        rig.tool_axis = {0, std::sin(angle), std::cos(angle)};
+        rig.tool_grip = {0.10f, 0.32f, 1.15f + 0.12f * std::cos(angle)};
+        rig.arm_grip = 1;
+        for (int i = 0; i < 2; ++i) {
+            Vec3 target = rig.tool_grip + rig.tool_axis * (i == 0 ? 0.15f : 0.0f);
+            if (m.tool == HumanTool::None) target = {i == 0 ? -0.15f : 0.15f, 0.32f + 0.10f * std::sin(pwork*kTau), 1.04f};
+            target.x += i == 0 ? -0.025f : 0.025f;
+            Vec3 wrist = target;
+            solve_leg(s.shoulder[i], wrist, {i == 0 ? -1.0f : 1.0f, 0.3f, -0.3f}, s.elbow[i], kUpperArmLength, kForearmLength);
+            s.wrist[i] = wrist;
+            rig.fore_dir[i] = normalize(wrist - s.elbow[i]);
+            rig.hand_dir[i] = normalize(target - wrist + rig.tool_axis * 0.04f);
+            rig.thumb_dir[i] = {i == 0 ? 1.0f : -1.0f, 0, 0};
+            s.fingertip[i] = wrist + rig.hand_dir[i] * 0.045f;
+            s.thumb[i] = wrist + rig.hand_dir[i] * 0.02f + rig.thumb_dir[i] * 0.02f;
+        }
+    }
     return rig;
 }
 
@@ -437,6 +459,27 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
     const f32 breath = 1.0f + 0.018f * rig.breath;
     const Vec3 swing = rig.swing;
     const Vec3 sway{swing.x, swing.y, 0.0f};
+
+    // Tool geometry is authored in the same three-dimensional body frame as
+    // the hands. It rotates and shades with the existing painted figure.
+    if (m.tool != HumanTool::None) {
+        const Vec3 axis = rig.tool_axis, grip = rig.tool_grip;
+        const Vec3 head = grip + axis * 0.57f;
+        constexpr u8 tool_group = 25;
+        paint.cone(grip - axis * 0.18f, head, 0.022f, 0.018f, hex(0x8D704B), Mat::Leather, tool_group);
+        const Vec3 side{1,0,0};
+        if (m.tool == HumanTool::Axe) {
+            paint.cone(head-side*0.06f, head+side*0.07f, 0.07f, 0.11f, hex(0x8A857A), Mat::Cloth, tool_group, FigurePartFlag::FlatCaps, 0.45f);
+            paint.cone(head+side*0.07f, head+side*0.15f, 0.11f, 0.065f, hex(0xB0AB98), Mat::Cloth, tool_group, FigurePartFlag::FlatCaps, 0.35f);
+        } else {
+            paint.cone(head-side*0.27f-axis*0.06f, head, 0.009f, 0.065f, hex(0x8A857A), Mat::Cloth, tool_group, 0, 0.5f);
+            paint.cone(head, head+side*0.27f-axis*0.06f, 0.065f, 0.009f, hex(0xB0AB98), Mat::Cloth, tool_group, 0, 0.5f);
+        }
+        for (int k = 0; k < 3; ++k) {
+            const Vec3 band = head - axis * (0.025f + static_cast<float>(k)*0.023f);
+            paint.cone(band-axis*0.007f, band+axis*0.007f, 0.031f, 0.031f, hex(0xB3A07A), Mat::Leather, tool_group, FigurePartFlag::FlatCaps);
+        }
+    }
 
     const Color hem = toned(look.tunic, 0.70f);
     const Color strap = toned(look.leather, 0.72f);

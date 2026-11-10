@@ -61,6 +61,10 @@ Window::Window(const WindowConfig& config) {
     glfwSetScrollCallback(window_, [](GLFWwindow* w, double, double dy) {
         static_cast<Window*>(glfwGetWindowUserPointer(w))->pending_scroll_ += static_cast<f32>(dy);
     });
+    glfwSetMouseButtonCallback(window_, [](GLFWwindow* w, int button, int action, int) {
+        if (button >= 0 && button < static_cast<int>(MouseButton::Count) && action == GLFW_PRESS)
+            static_cast<Window*>(glfwGetWindowUserPointer(w))->pending_button_pressed_[button] = true;
+    });
 
     ZL_LOG("OpenGL %s on %s", reinterpret_cast<const char*>(glGetString(GL_VERSION)), reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
 }
@@ -93,6 +97,8 @@ void Window::poll() {
     }
     for (int b = 0; b < static_cast<int>(MouseButton::Count); ++b) {
         input_.button_down[b] = glfwGetMouseButton(window_, b) == GLFW_PRESS;
+        input_.button_pressed[b] = pending_button_pressed_[b];
+        pending_button_pressed_[b] = false;
     }
 
     // Cursor positions arrive in window coordinates; convert to framebuffer

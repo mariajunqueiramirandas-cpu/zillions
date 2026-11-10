@@ -9,8 +9,9 @@ pour in from the map edges. The terrain is the defence: cliffs, rivers and
 mountains funnel the horde through ramps, fords and passes, and the game is
 about choosing which chokepoints to hold. See [the design notes](docs/design.md).
 
-The engine, map generator and a playable human character are built. The colony,
-economy and horde are still to build.
+The engine, map generator, playable human and first gathering economy are built.
+Gather wood, stone and fiber, craft tools, cut trees, mine stone and establish a
+storage chest. Colony workers, buildings and the horde are still to build.
 
 The world uses a 2:1 isometric view with displaced terrain, raised plateaus,
 sloping ramps, depth-tested scenery, and soft cast shadows from a world-space sun. **Q / E** turn the view by 90° around
@@ -53,6 +54,22 @@ record the visual and performance checks.
 
 ![Recorded player demo: idle, walk, turn, jog, sprint and stop](docs/character/player-demo.gif)
 
+## Gathering and the first camp
+
+Start empty-handed. Hold the left mouse button near the base of fallen
+branches, loose stones or bushes to gather wood, stone and fiber. **I** opens
+the satchel and **B** opens crafting. Make rope, then a stone axe and pickaxe.
+Those tools unlock trees and larger stone deposits. Depleted objects leave
+nonblocking stumps or rubble; clearing every solid object frees the tile.
+
+Craft a chest, choose **Place chest** in the inventory, and click clear ground
+nearby. Open the placed chest nearby and Shift-click stacks to transfer them.
+Right-click splits a stack or places one held item. Esc closes a panel or cancels
+placement. Supplies and world changes last for this session; saving is not yet
+implemented. See [the survival notes](docs/survival.md) for recipes, art and checks.
+
+![Inventory and crafting](docs/screenshots/survival-inventory.png)
+
 ## Building
 
 Needs CMake 3.21+, a C++20 compiler and OpenGL 3.3. GLFW and stb are fetched at
@@ -81,19 +98,25 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
          [--no-character] [--player X Y] [--heading DEG] [--speed M --phase P]
          [--look N] [--hood] [--time SECONDS] [--character-sheet FILE]
          [--character-style painted|smooth]
+         [--tool axe|pickaxe] [--work-phase P]
          [--record-demo DIR --demo-seconds N --demo-fps N]
          [--overlay height|pass] [--grid] [--bench]
 ```
 
 | Input | Action |
 |---|---|
+| hold left mouse | gather the resource near the cursor's ground position, while in reach |
+| I / B | inventory and hand crafting; B switches storage to crafting |
+| left / right click a stack | pick up or place a stack / split or place one item |
+| Shift-click | transfer a stack to/from an open chest; queue up to five crafts |
+| Esc | close panel, cancel chest placement, otherwise quit |
 | Q / E | rotate the world 90° counterclockwise / clockwise |
 | WASD / arrows | move the character (Shift: sprint, Ctrl: stroll); pan in management mode |
 | Space | switch between character-follow mode and management mode (autonomous character + city-builder camera) |
 | window borders / right- or middle-drag | pan in management mode |
 | mouse wheel | zoom about the character while following, or the cursor in management mode |
 | C / X / 1 | new seeded look / toggle hood / restore the hero |
-| R | generate the next seed |
+| Ctrl+R | reset the session with the next seed (R alone in map-only mode) |
 | F / H | frame the whole map (in management mode) / centre on the character (start area with `--no-character`) |
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |

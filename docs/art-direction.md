@@ -1,5 +1,10 @@
 # Zillions: art direction
 
+The first gathering milestone adds four procedural camp props, inventory icons
+and hand-held tools. Its art sources and production plan are documented in
+[the survival notes](survival.md#art-and-animation). The original painted
+landscape brief below still defines their palette and readability targets.
+
 This is the brief for replacing the placeholder art with real artwork. It lists
 every image the game can show today, says what each one has to look like, and
 gives the exact sizes the renderer expects.

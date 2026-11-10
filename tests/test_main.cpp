@@ -885,8 +885,9 @@ void check_art_is_well_formed(const TerrainArt& art) {
 
     const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush,   &TerrainArt::stone,
                                             &TerrainArt::iron,      &TerrainArt::gold,    &TerrainArt::tuft,   &TerrainArt::flower,
-                                            &TerrainArt::pebble,    &TerrainArt::reed,    &TerrainArt::boulder};
-    const int counts[] = {6, 4, 3, 3, 3, 3, 4, 4, 3, 3, 4};
+                                            &TerrainArt::pebble,    &TerrainArt::reed,    &TerrainArt::boulder,
+                                            &TerrainArt::branch, &TerrainArt::stump, &TerrainArt::rubble, &TerrainArt::chest};
+    const int counts[] = {6, 4, 3, 3, 3, 3, 4, 4, 3, 3, 4, 1, 1, 1, 1};
     int total = 0;
     for (size_t i = 0; i < std::size(sets); ++i) {
         const SpriteSet& set = art.*sets[i];
