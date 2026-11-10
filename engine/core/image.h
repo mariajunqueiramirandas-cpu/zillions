@@ -1,4 +1,4 @@
-// CPU-side RGBA8 image, used for procedural art, screenshots and previews.
+// CPU-side RGBA8 image, used for art, screenshots and previews.
 #pragma once
 
 #include <vector>
@@ -27,5 +27,10 @@ struct Image {
 
 // Writes an RGBA PNG. Returns false if the file could not be written.
 bool write_png(const char* path, const Image& image);
+
+// Reads a PNG as RGBA8 with straight alpha; images without an alpha channel
+// come back opaque. Returns false, leaving `image` alone, if the file is
+// missing or is not a PNG.
+bool read_png(const char* path, Image& image);
 
 }  // namespace zl

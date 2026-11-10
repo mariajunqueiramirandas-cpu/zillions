@@ -1,7 +1,7 @@
-// Procedurally generated placeholder art: ground textures and a sprite atlas
-// for trees, rocks and small ground cover. Everything is drawn in code at
-// start-up, so the game ships no image files yet and each asset can be swapped
-// for hand-made art later without touching the renderer.
+// Art for the map: ground textures and a sprite atlas for trees, rocks and
+// small ground cover. The painted art is read from PNG files laid out as
+// docs/art-direction.md describes. Every piece also has a placeholder drawn in
+// code, used when the files are not there, so the game runs without its assets.
 #pragma once
 
 #include <vector>
@@ -18,6 +18,10 @@ class JobSystem;
 inline constexpr i32 kArtTilePixels = 32;
 // Each ground texture repeats every this many tiles.
 inline constexpr i32 kGroundRepeatTiles = 8;
+// Keep sprites isolated through mip level 4 (1/16 scale). Sprites disappear
+// below 2.5 px/tile, before a smaller mip could add useful detail.
+inline constexpr i32 kSpriteAtlasMipLevel = 4;
+inline constexpr i32 kSpriteAtlasPadding = 1 << kSpriteAtlasMipLevel;
 // Extra texture-array layer holding tileable noise for the terrain shader.
 inline constexpr i32 kNoiseLayer = kTerrainCount;
 
@@ -40,8 +44,21 @@ struct TerrainArt {
     SpriteSet broadleaf, conifer, bush;
     SpriteSet stone, iron, gold;
     SpriteSet tuft, flower, pebble, reed, boulder;
+
+    // Whether each group was read from files or drawn in code.
+    bool painted_ground = false;
+    bool painted_sprites = false;
 };
 
+// Reads <asset_dir>/ground/<terrain>.png and <asset_dir>/sprites/<family>_<n>.png.
+// The ground textures and the sprites are each taken from files only if the
+// whole group is present with the expected sizes; otherwise that group is
+// drawn in code and the reason is logged. The water and noise layers are data
+// for the terrain shader and are always generated. `seed` only affects what is
+// drawn in code.
+TerrainArt load_terrain_art(JobSystem& jobs, const char* asset_dir, u32 seed = 7);
+
+// Draws everything in code: load_terrain_art() without an asset directory.
 TerrainArt build_terrain_art(JobSystem& jobs, u32 seed = 7);
 
 }  // namespace zl

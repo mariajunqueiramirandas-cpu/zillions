@@ -1,15 +1,22 @@
 // Headless test suite. A deliberately tiny harness: TEST registers a function,
 // CHECK records a failure and carries on, main runs everything.
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <vector>
 
 #include "core/clock.h"
+#include "core/image.h"
 #include "core/jobs.h"
 #include "core/rng.h"
 #include "gfx/camera2d.h"
 #include "math/noise.h"
+#include "render/terrain_art.h"
 #include "world/mapgen.h"
 
 using namespace zl;
@@ -316,6 +323,224 @@ TEST(mapgen_resolution_keeps_the_geography) {
     const f64 ratio = static_cast<f64>(b.stats.walkable_tiles) / a.stats.walkable_tiles;
     CHECK(ratio > 13.0 && ratio < 19.0);
     CHECK(b.stats.buildable_near_start > 10 * a.stats.buildable_near_start);
+}
+
+// --- art ----------------------------------------------------------------------
+
+struct ArtTestDirectory {
+    std::filesystem::path path;
+
+    ArtTestDirectory() {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (int i = 0; i < 100; ++i) {
+            path = std::filesystem::temp_directory_path() / ("zl_art_" + std::to_string(stamp) + "_" + std::to_string(i));
+            if (std::filesystem::create_directory(path)) return;
+        }
+        ZL_CHECK(false, "cannot create an art test directory");
+    }
+    ~ArtTestDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
+    void copy_assets() const {
+        for (const char* group : {"ground", "sprites"}) {
+            std::filesystem::copy(std::filesystem::path(ZL_ASSET_DIR) / group, path / group, std::filesystem::copy_options::recursive);
+        }
+    }
+};
+
+bool same_pixels(const Image& a, const Image& b) {
+    if (a.width != b.width || a.height != b.height) return false;
+    for (size_t i = 0; i < a.pixels.size(); ++i) {
+        const Color& p = a.pixels[i];
+        const Color& q = b.pixels[i];
+        if (p.r != q.r || p.g != q.g || p.b != q.b || p.a != q.a) return false;
+    }
+    return true;
+}
+
+TEST(png_round_trips) {
+    Image image(37, 21);
+    for (i32 y = 0; y < image.height; ++y) {
+        for (i32 x = 0; x < image.width; ++x) {
+            const u32 h = hash2(x, y, 11u);
+            image.at(x, y) = {static_cast<u8>(h), static_cast<u8>(h >> 8), static_cast<u8>(h >> 16), static_cast<u8>(h >> 24)};
+        }
+    }
+    const ArtTestDirectory directory;
+    const std::string path = (directory.path / "round_trip.png").string();
+    CHECK(write_png(path.c_str(), image));
+    Image back;
+    CHECK(read_png(path.c_str(), back));
+    CHECK(same_pixels(image, back));
+    std::filesystem::remove(path);
+
+    // A missing file is reported and leaves the image alone.
+    CHECK(!read_png(path.c_str(), back));
+    CHECK(same_pixels(image, back));
+
+    // Corrupt files, including a truncated PNG, must not destroy the caller's image.
+    for (const std::string& contents : {std::string("not a PNG"), std::string("\x89PNG\r\n\x1a\n", 8)}) {
+        std::ofstream(path, std::ios::binary).write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        CHECK(!read_png(path.c_str(), back));
+        CHECK(same_pixels(image, back));
+    }
+}
+
+void check_art_is_well_formed(const TerrainArt& art) {
+    CHECK(art.ground.size() == static_cast<size_t>(kTerrainCount) + 1);
+    for (const Image& layer : art.ground) {
+        CHECK(layer.width == kArtTilePixels * kGroundRepeatTiles && layer.height == layer.width);
+    }
+
+    const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush,   &TerrainArt::stone,
+                                            &TerrainArt::iron,      &TerrainArt::gold,    &TerrainArt::tuft,   &TerrainArt::flower,
+                                            &TerrainArt::pebble,    &TerrainArt::reed,    &TerrainArt::boulder};
+    const int counts[] = {6, 4, 3, 3, 3, 3, 4, 4, 3, 3, 4};
+    int total = 0;
+    for (size_t i = 0; i < std::size(sets); ++i) {
+        const SpriteSet& set = art.*sets[i];
+        CHECK(set.count == counts[i]);
+        CHECK(set.first >= 0 && set.first + set.count <= static_cast<i32>(art.defs.size()));
+        total += set.count;
+    }
+    CHECK(static_cast<size_t>(total) == art.defs.size());
+
+    for (const SpriteDef& def : art.defs) {
+        CHECK(def.u1 > def.u0 && def.v1 > def.v0);
+        CHECK(def.anchor_x > 0.0f && def.anchor_x < def.width && def.anchor_y > 0.0f && def.anchor_y < def.height);
+        // Every sprite has something in it.
+        const f32 scale = static_cast<f32>(art.sprites.width) / 65535.0f;
+        bool visible = false;
+        for (i32 y = static_cast<i32>(def.v0 * scale); y < static_cast<i32>(def.v1 * scale) && !visible; ++y) {
+            for (i32 x = static_cast<i32>(def.u0 * scale); x < static_cast<i32>(def.u1 * scale) && !visible; ++x) visible = art.sprites.at(x, y).a > 128;
+        }
+        CHECK(visible);
+    }
+
+    // The atlas is drawn with premultiplied alpha: no colour can exceed its coverage.
+    bool premultiplied = true;
+    for (const Color& c : art.sprites.pixels) premultiplied = premultiplied && c.r <= c.a && c.g <= c.a && c.b <= c.a;
+    CHECK(premultiplied);
+}
+
+TEST(painted_art_loads_from_files) {
+    JobSystem jobs(4);
+    const TerrainArt painted = load_terrain_art(jobs, ZL_ASSET_DIR);
+    CHECK(painted.painted_ground);
+    CHECK(painted.painted_sprites);
+    check_art_is_well_formed(painted);
+
+    const TerrainArt drawn = build_terrain_art(jobs);
+    CHECK(!drawn.painted_ground && !drawn.painted_sprites);
+    check_art_is_well_formed(drawn);
+
+    // Files replace the placeholders, except for the layers that are shader data.
+    const auto layer = [](const TerrainArt& art, int index) -> const Image& { return art.ground[static_cast<size_t>(index)]; };
+    CHECK(!same_pixels(layer(painted, static_cast<int>(Terrain::Grass)), layer(drawn, static_cast<int>(Terrain::Grass))));
+    CHECK(!same_pixels(painted.sprites, drawn.sprites));
+    CHECK(same_pixels(layer(painted, static_cast<int>(Terrain::Water)), layer(drawn, static_cast<int>(Terrain::Water))));
+    CHECK(same_pixels(layer(painted, kNoiseLayer), layer(drawn, kNoiseLayer)));
+    for (const Color& c : layer(painted, static_cast<int>(Terrain::Grass)).pixels) CHECK(c.a == 255);
+
+    // Check actual decoded texels, not just that files differ from placeholders.
+    const char* names[] = {nullptr, "shallows", "sand", "grass", "dirt", "forest", "mountain", "rocks"};
+    for (int t = 1; t < kTerrainCount; ++t) {
+        Image source;
+        const std::string path = std::string(ZL_ASSET_DIR) + "/ground/" + names[t] + ".png";
+        CHECK(read_png(path.c_str(), source));
+        CHECK(same_pixels(layer(painted, t), source));
+    }
+
+    const char* families[] = {"broadleaf", "conifer", "bush", "stone", "iron", "gold", "tuft", "flower", "pebble", "reed", "boulder"};
+    const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush, &TerrainArt::stone,
+                                            &TerrainArt::iron, &TerrainArt::gold, &TerrainArt::tuft, &TerrainArt::flower,
+                                            &TerrainArt::pebble, &TerrainArt::reed, &TerrainArt::boulder};
+    for (size_t f = 0; f < std::size(families); ++f) {
+        const SpriteSet& set = painted.*sets[f];
+        for (int v = 0; v < set.count; ++v) {
+            const SpriteDef& def = painted.defs[static_cast<size_t>(set.first + v)];
+            const auto coordinate = [&](u16 uv) {
+                return static_cast<i32>(std::lround(static_cast<f32>(uv) * static_cast<f32>(painted.sprites.width) / 65535.0f));
+            };
+            const i32 ox = coordinate(def.u0), oy = coordinate(def.v0);
+            CHECK(ox % kSpriteAtlasPadding == 0 && oy % kSpriteAtlasPadding == 0);
+            Image source;
+            const std::string path = std::string(ZL_ASSET_DIR) + "/sprites/" + families[f] + "_" + std::to_string(v) + ".png";
+            CHECK(read_png(path.c_str(), source));
+            CHECK(coordinate(def.u1) - ox == source.width && coordinate(def.v1) - oy == source.height);
+            for (i32 y = 0; y < source.height; ++y) {
+                for (i32 x = 0; x < source.width; ++x) {
+                    const Color& s = source.at(x, y);
+                    const Color& a = painted.sprites.at(ox + x, oy + y);
+                    CHECK(a.a == s.a);
+                    CHECK(a.r == (s.r * s.a + 127u) / 255u);
+                    CHECK(a.g == (s.g * s.a + 127u) / 255u);
+                    CHECK(a.b == (s.b * s.a + 127u) / 255u);
+                }
+            }
+            // A full transparent mip texel separates every sprite at the
+            // coarsest permitted level. No neighbour can enter its filter.
+            bool isolated = true;
+            for (i32 y = -kSpriteAtlasPadding; y < source.height + kSpriteAtlasPadding; ++y) {
+                for (i32 x = -kSpriteAtlasPadding; x < source.width + kSpriteAtlasPadding; ++x) {
+                    if (x >= 0 && x < source.width && y >= 0 && y < source.height) continue;
+                    isolated = isolated && painted.sprites.at(ox + x, oy + y).a == 0;
+                }
+            }
+            CHECK(isolated);
+        }
+    }
+}
+
+TEST(art_falls_back_to_placeholders_without_files) {
+    JobSystem jobs(4);
+    const ArtTestDirectory directory;
+    const std::string missing = (directory.path / "missing").string();
+    const TerrainArt fallback = load_terrain_art(jobs, missing.c_str());
+    CHECK(!fallback.painted_ground && !fallback.painted_sprites);
+    check_art_is_well_formed(fallback);
+
+    // The placeholders do not depend on how many threads drew them.
+    JobSystem single(1);
+    const TerrainArt drawn = build_terrain_art(single);
+    CHECK(same_pixels(fallback.sprites, drawn.sprites));
+    for (size_t i = 0; i < drawn.ground.size(); ++i) CHECK(same_pixels(fallback.ground[i], drawn.ground[i]));
+}
+
+TEST(incomplete_art_falls_back_by_group_without_partial_replacement) {
+    const ArtTestDirectory directory;
+    directory.copy_assets();
+    const std::string dir = directory.path.string();
+    JobSystem jobs(4);
+    const TerrainArt drawn = build_terrain_art(jobs);
+    const TerrainArt painted = load_terrain_art(jobs, ZL_ASSET_DIR);
+
+    // Fail on the LAST member of each group: earlier files must not leak into
+    // the fallback. The other complete group must still load from disk.
+    for (const bool ground : {false, true}) {
+        const char* relative = ground ? "ground/rocks.png" : "sprites/boulder_3.png";
+        const auto file = directory.path / relative;
+        for (int failure = 0; failure < 3; ++failure) {
+            std::filesystem::remove(file);
+            if (failure == 1) CHECK(write_png(file.string().c_str(), Image(3, 5, Color{255, 0, 0, 255})));
+            if (failure == 2) std::ofstream(file, std::ios::binary) << "corrupt PNG";
+            const TerrainArt art = load_terrain_art(jobs, dir.c_str());
+            CHECK(art.painted_ground == !ground && art.painted_sprites == ground);
+            const TerrainArt& expected_ground = ground ? drawn : painted;
+            for (size_t i = 0; i < art.ground.size(); ++i) CHECK(same_pixels(art.ground[i], expected_ground.ground[i]));
+            CHECK(same_pixels(art.sprites, ground ? painted.sprites : drawn.sprites));
+            // Both sources keep identical atlas slots for live reload.
+            CHECK(art.defs.size() == painted.defs.size());
+            for (size_t i = 0; i < art.defs.size(); ++i) {
+                const SpriteDef& a = art.defs[i];
+                const SpriteDef& b = painted.defs[i];
+                CHECK(a.u0 == b.u0 && a.u1 == b.u1 && a.v0 == b.v0 && a.v1 == b.v1);
+                CHECK(a.width == b.width && a.height == b.height && a.anchor_x == b.anchor_x && a.anchor_y == b.anchor_y);
+            }
+        }
+        std::filesystem::copy_file(std::filesystem::path(ZL_ASSET_DIR) / relative, file, std::filesystem::copy_options::overwrite_existing);
+    }
 }
 
 }  // namespace

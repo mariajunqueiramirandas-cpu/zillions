@@ -21,11 +21,11 @@ the horde are still to build.
 
 ## Generated artwork
 
-The [art showcase](docs/art/showcase.md) contains seven image-model ground
-textures and forty scenery sprites following the [art brief](docs/art-direction.md),
-with contact sheets at four zoom levels and tiled ground proofs. Files live in
-`assets/ground` and `assets/sprites`; the viewer still uses its procedural
-placeholders until image loading and shader palette integration are implemented.
+The viewer draws the map with painted art: seven image-model ground textures
+and forty scenery sprites following the [art brief](docs/art-direction.md).
+Files live in `assets/ground` and `assets/sprites`, and the
+[art showcase](docs/art/showcase.md) has contact sheets at four zoom levels and
+tiled ground proofs. The screenshots on this page are taken with that art.
 
 ![Generated ground textures](docs/art/ground-swatches.png)
 
@@ -51,6 +51,7 @@ which need no windowing system or GPU.
 
 ```
 zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no-vsync]
+         [--assets DIR]
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
          [--overlay height|pass] [--grid] [--bench]
 ```
@@ -64,6 +65,16 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
+| F5 | reload ground textures and sprites without changing the map or camera |
+
+The painted art is read from `--assets DIR`, or by default from `./assets`, or
+failing that from the `assets` folder of the source tree the binary was built
+from. If the ground textures or the sprites cannot be loaded, the viewer says
+why and draws that group in code instead.
+
+F5 repeats the same asset lookup, so edits can be checked without restarting.
+With automatic discovery, a local `assets` directory takes precedence even if
+one group is incomplete; the log reports that group's fallback.
 
 `zl_mapgen` is the headless generator: `--out preview.png` writes a flat-colour
 preview, `--bench` times generation.
@@ -85,10 +96,11 @@ engine/math      vectors, simplex / fBm / ridged noise
 engine/platform  window, OpenGL context, input (GLFW)
 engine/gfx       shaders, textures, render targets, 2D camera, sprite batch
 game/world       tile map, map generator, CPU preview        (headless)
-game/render      terrain shader, relief/erosion, procedural art
+game/render      terrain shader, relief/erosion, art loading and placeholders
 game/app         the viewer executable
 tools/           zl_mapgen
 tests/           headless test suite
+assets/          painted ground textures and sprites, and their source sheets
 ```
 
 `zl_core` and `zl_world` have no dependency on a window or GPU, so the
@@ -106,9 +118,11 @@ simulation can run in tests, tools and (later) a server.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is
   stateless. A seed produces the same map on any number of threads (tested).
 - **Fixed timestep** scaffolding is in place for the simulation.
-- **Procedural runtime placeholders.** Ground textures and sprites are drawn
-  in code at start-up. The generated artwork in `assets/` is delivered for
-  review; loading it into the viewer is a separate step. The brief is in
+- **Painted art with placeholders behind it.** Ground textures and sprites are
+  PNG files, read at start-up and packed into a texture array and one sprite
+  atlas. Each also has a placeholder drawn in code, used when the files are
+  missing, so the game runs without its assets. Water patterns and shader noise
+  are always generated. The brief for the art is in
   [docs/art-direction.md](docs/art-direction.md).
 
 ## Map generation

@@ -5,9 +5,11 @@ every image the game can show today, says what each one has to look like, and
 gives the exact sizes the renderer expects.
 
 It is written to be read on its own. Where it helps to see the source, the
-placeholders are drawn in `game/render/terrain_art.cpp` and used by
-`game/render/map_renderer.cpp`. The placeholders are bright and clean; they
-show the sizes and layout, **not** the look. The look is defined here.
+art is loaded in `game/render/terrain_art.cpp` and used by
+`game/render/map_renderer.cpp`. The same file draws a placeholder in code for
+every image, used when the files are missing. The placeholders are bright and
+clean; they show the sizes and layout, **not** the look. The look is defined
+here.
 
 ## Scope
 
@@ -25,8 +27,8 @@ show the sizes and layout, **not** the look. The look is defined here.
 - **Anything the terrain shader draws by itself:** borders between terrain
   types, cliff faces, ramps, the shape and shading of mountains, water colour
   and movement, shoreline foam, shadows cast by high ground. None of these need
-  an image, so there are no transition tiles or autotile sets to make. Some of
-  their colours do have to change to fit this direction; see
+  an image, so there are no transition tiles or autotile sets to make. Their
+  colours are set in code to fit this direction; see
   [Colours the shader owns](#colours-the-shader-owns).
 - **Buildings, units, the horde, effects and UI.** The game design has not
   decided what these are yet (`docs/design.md` lists them as not started), so
@@ -142,7 +144,9 @@ These facts explain most of the constraints below.
   neighbouring terrains along a wandering border, then multiplies the result by
   lighting, shadow, a height tint and a large-scale light/dark variation.
 - **Sprites.** All sprites are packed into one 1024 × 1024 atlas with
-  mipmaps and drawn with premultiplied alpha. Each sprite has an **anchor**:
+  mipmaps and drawn with premultiplied alpha. Slots have 16 px transparent
+  padding and alignment, and the mip chain stops at level 4 to keep neighbouring
+  sprites out of the filter when zoomed out. Each sprite has an **anchor**:
   the pixel that sits on the object's position on the ground. Sprites are drawn
   north to south, so an object overlaps whatever is behind it.
 - **No rotation and no mirroring.** A sprite is only ever scaled (roughly 0.7×
@@ -272,28 +276,29 @@ depth and foam are computed. The same applies to the ninth "noise" layer.
 
 Some colours on screen are constants in the terrain shader
 (`kTerrainFragment` in `game/render/map_renderer.cpp`), not pixels in any
-image. They were chosen for the bright placeholders and will clash with this
-palette until they are changed. That is a code change, separate from the
-artwork, and it has not been made yet. The targets, to be tuned by eye once
-the new textures are in:
+image. They are named at the top of the shader and tuned by eye against the
+painted textures:
 
-| What | Now | Target |
+| What | Constant | Colour |
 |---|---|---|
-| Water at the shore | bright turquoise | murky grey-green, about `#6A7E6C` |
-| Water mid-depth | clear blue | stagnant teal-grey, about `#3E5650` |
-| Deep water | deep blue | near-black green, about `#1E2E30` |
-| Light patterns on water | bright, lively | about half as strong, tinted bone |
-| Wash over fords | turquoise | the shore water colour |
-| Shoreline foam | clean white | dirty scum, about `#C8C4AC`, fainter |
-| Scrub on mountain foothills | fresh green | sallow olive, as grass |
+| Water at the shore, and the wash over fords | `WATER_SHORE` | murky grey-green, about `#5E7569` |
+| Water mid-depth | `WATER_MID` | stagnant teal-grey, about `#38524C` |
+| Deep water | `WATER_DEEP` | near-black green, about `#1A292B` |
+| Light patterns on water | `WATER_GLINT` | faint, tinted bone |
+| Shoreline foam | `FOAM` | dirty scum, about `#C7C4AB`, faint |
+| Scrub on mountain foothills | `SCRUB` | sallow olive, as grass |
+| Smoke in the air | `HAZE` | warm grey, about `#8F8778` |
 
-The moisture tint on grass, the warm tint on cliff faces and the paler tone of
-high ground can stay as they are.
+The shore colour is a little darker than a straight match to the palette would
+give, so that a ford still reads as paler than the river around it.
 
 The leaden sky and smoke haze of the reference paintings cannot come from the
-images either. A slight overall grade in the shader (a little less saturation
-and a thin warm-grey haze) would supply it, and is worth trying in the same
-code change.
+images, so the shader ends with a slight overall grade: the ground loses about
+a seventh of its saturation and a thin layer of `HAZE` is laid over it. Sprites
+are not graded; they are painted in the palette already.
+
+The moisture tint on grass, the warm tint on cliff faces and the paler tone of
+high ground are unchanged from the placeholder version.
 
 ## Sprites
 
@@ -473,10 +478,8 @@ water.
 
 ## Delivery
 
-The engine cannot load image files yet: today the art is generated in code at
-start-up and `engine/core/image.h` can only write PNGs. Wiring a loader in is a
-separate task from producing the artwork. To make that task simple, deliver
-files under this layout:
+The viewer loads the art at start-up from this layout, under `./assets` or the
+directory given with `--assets`:
 
 ```
 assets/ground/grass.png
@@ -492,6 +495,14 @@ assets/sprites/<family>_<n>.png     e.g. broadleaf_0.png ... broadleaf_5.png
 Family names are the ones in the table above; variants are numbered from 0.
 For `broadleaf`, variants 0 and 3 use palette A, 1 and 4 palette B, and 2 and
 5 palette C.
+
+The loader is strict about what the renderer depends on. The seven ground
+textures are used only if all of them are present and 256 × 256, and the forty
+sprites only if all of them are present with exactly the canvas sizes above;
+otherwise that whole group falls back to the placeholders and the log names the
+first file that was wrong. Anchors are fixed in code (`kFamilies` in
+`terrain_art.cpp`), so a sprite must be painted to its anchor, not the other
+way round.
 
 ### Checklist before handing back
 
