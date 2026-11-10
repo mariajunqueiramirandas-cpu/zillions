@@ -191,4 +191,179 @@ HumanMotion Player::motion_at(f32 alpha) const {
     return m;
 }
 
+namespace {
+
+bool clear_line(const TileMap& map, Vec2 from, Vec2 to, f32 radius) {
+    if (!can_stand(map, to, radius)) return false;
+    const Vec2 delta = to - from;
+    const f32 dist = length(delta);
+    const int steps = std::max(1, static_cast<int>(std::ceil(dist / 0.32f)));
+    for (int i = 1; i < steps; ++i) {
+        const Vec2 p = from + delta * (static_cast<f32>(i) / static_cast<f32>(steps));
+        if (!can_stand(map, p, radius)) return false;
+    }
+    return true;
+}
+
+f32 waypoint_interest(const TileMap& map, Vec2 pos) {
+    const i32 tx = static_cast<i32>(std::floor(pos.x)), ty = static_cast<i32>(std::floor(pos.y));
+    if (!map.in_bounds(tx, ty)) return 0.0f;
+    const size_t centre = static_cast<size_t>(map.index(tx, ty));
+    f32 bonus = centre < map.terrain.size() && map.terrain[centre] != Terrain::Shallows ? 0.45f : 0.0f;
+    const i32 neighbours[4][2] = {{tx + 1, ty}, {tx - 1, ty}, {tx, ty - 1}, {tx, ty + 1}};
+    for (const auto& n : neighbours) {
+        if (!map.in_bounds(n[0], n[1])) continue;
+        const size_t idx = static_cast<size_t>(map.index(n[0], n[1]));
+        const Terrain t = idx < map.terrain.size() ? map.terrain[idx] : Terrain::Grass;
+        const bool has_resource = idx < map.resource.size() && map.resource[idx] != Resource::None;
+        const bool is_ramp = idx < map.flags.size() && (map.flags[idx] & TileFlag::Ramp) != 0;
+        if (t == Terrain::Forest || t == Terrain::Rocks || has_resource || is_ramp) {
+            bonus += 0.35f;
+            break;
+        }
+    }
+    return bonus;
+}
+
+}  // namespace
+
+void PlayerAutonomy::reset(Vec2 anchor, u64 seed) {
+    rng_.reseed(mix64(seed ^ 0xA5704F991C3E6B2Dull));
+    anchor_ = target_ = anchor;
+    glance_dir_ = {0.0f, 1.0f};
+    timer_ = rng_.range(0.25f, 0.55f);
+    leg_limit_ = 5.0f;
+    glance_time_ = -1.0f;
+    curve_ = 0.0f;
+    blocked_time_ = 0.0f;
+    pace_ = 0;
+    chain_left_ = 0;
+    moving_ = false;
+    initialized_ = true;
+}
+
+bool PlayerAutonomy::pick_waypoint(const TileMap& map, const Player& player, bool continuation) {
+    const Vec2 pos = player.position();
+    if (length(pos - anchor_) > kWanderRadius * 1.6f) anchor_ = pos;
+    const Vec2 facing{std::cos(player.motion().heading), std::sin(player.motion().heading)};
+
+    f32 best_score = -1.0e30f;
+    Vec2 best = pos;
+    bool found = false;
+    for (int i = 0; i < 14; ++i) {
+        const f32 angle = rng_.range(0.0f, kTau);
+        const Vec2 dir{std::cos(angle), std::sin(angle)};
+        const Vec2 origin = i < 10 ? anchor_ : pos;
+        const f32 radius = i < 10 ? rng_.range(1.6f, kWanderRadius) : rng_.range(1.1f, 3.0f);
+        const Vec2 cand = origin + dir * radius;
+        const f32 dist = length(cand - pos);
+        if (dist < 1.0f || length(cand - anchor_) > kWanderRadius + 0.5f) continue;
+        if (!clear_line(map, pos, cand, Player::kRadius)) continue;
+
+        const Vec2 step_dir = (cand - pos) / dist;
+        const f32 align = dot(step_dir, facing);
+        if (continuation && align < -0.15f) continue;
+        const f32 score = 1.0f + rng_.range(0.0f, 0.45f) + align * (continuation ? 0.85f : 0.30f) + waypoint_interest(map, cand);
+        if (score > best_score) {
+            best_score = score;
+            best = cand;
+            found = true;
+        }
+    }
+    if (!found) return false;
+
+    target_ = best;
+    timer_ = 0.0f;
+    blocked_time_ = 0.0f;
+    const f32 d = length(target_ - pos);
+    leg_limit_ = clamp(d * 1.8f + 1.5f, 2.5f, 8.0f);
+    curve_ = rng_.range(-0.26f, 0.26f);
+    if (!continuation) {
+        chain_left_ = (d < 4.8f && rng_.chance(0.45f)) ? 1 : 0;
+        if (d > 4.2f) pace_ = rng_.chance(0.25f) ? 2 : 1;
+        else pace_ = rng_.chance(0.35f) ? 1 : 0;
+    }
+    return true;
+}
+
+PlayerInput PlayerAutonomy::step(const TileMap& map, const Player& player, f32 dt) {
+    if (!(dt > 0.0f) || !std::isfinite(dt)) return {};
+    if (!initialized_) reset(player.position(), map.seed);
+
+    if (!moving_) {
+        timer_ -= dt;
+        if (glance_time_ > 0.0f && timer_ <= glance_time_ && timer_ > glance_time_ - 0.12f) {
+            return {glance_dir_, false, true};
+        }
+        if (timer_ > 0.0f) return {};
+        if (!pick_waypoint(map, player, false)) {
+            timer_ = 0.8f;
+            glance_time_ = -1.0f;
+            return {};
+        }
+        moving_ = true;
+    }
+
+    timer_ += dt;
+    const Vec2 pos = player.position();
+    Vec2 to_target = target_ - pos;
+    f32 dist = length(to_target);
+
+    if (chain_left_ > 0 && dist < 0.85f) {
+        --chain_left_;
+        if (pick_waypoint(map, player, true)) {
+            to_target = target_ - pos;
+            dist = length(to_target);
+        }
+    }
+
+    if (dist < 0.28f || timer_ >= leg_limit_) {
+        moving_ = false;
+        timer_ = rng_.range(0.85f, 2.5f);
+        if (timer_ > 1.25f && rng_.chance(0.55f)) {
+            glance_time_ = timer_ * rng_.range(0.40f, 0.65f);
+            const f32 angle = player.motion().heading + rng_.range(-1.3f, 1.3f);
+            glance_dir_ = {std::cos(angle), std::sin(angle)};
+        } else {
+            glance_time_ = -1.0f;
+        }
+        return {};
+    }
+
+    if (timer_ > 0.25f && length(player.velocity()) < 0.15f) {
+        blocked_time_ += dt;
+        if (blocked_time_ > 0.35f) {
+            if (!pick_waypoint(map, player, true)) {
+                moving_ = false;
+                timer_ = rng_.range(0.5f, 1.2f);
+                glance_time_ = -1.0f;
+                return {};
+            }
+            to_target = target_ - pos;
+            dist = length(to_target);
+        }
+    } else {
+        blocked_time_ = std::max(0.0f, blocked_time_ - dt * 2.0f);
+    }
+
+    f32 angle = std::atan2(to_target.y, to_target.x) + curve_ * clamp(dist / 3.5f, 0.0f, 1.0f);
+    Vec2 steer{std::cos(angle), std::sin(angle)};
+    if (dist > 0.6f && !can_stand(map, pos + steer * 0.55f, Player::kRadius)) {
+        for (f32 offset : {0.45f, -0.45f, 0.90f, -0.90f, 1.35f, -1.35f}) {
+            const Vec2 alt{std::cos(angle + offset), std::sin(angle + offset)};
+            if (can_stand(map, pos + alt * 0.55f, Player::kRadius)) {
+                steer = alt;
+                break;
+            }
+        }
+    }
+
+    PlayerInput input;
+    input.move = steer;
+    if (pace_ == 2 && timer_ < 0.55f && dist > 2.2f) input.sprint = true;
+    else if (pace_ >= 1 && dist > 1.15f) input.walk = false;
+    else input.walk = true;
+    return input;
+}
+
 }  // namespace zl

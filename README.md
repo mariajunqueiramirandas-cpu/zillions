@@ -32,9 +32,12 @@ tiled ground proofs. The screenshots on this page are taken with that art.
 ## The player's character
 
 Walk a human character around the map with WASD or the arrows; Shift sprints
-and Ctrl strolls. The camera follows until Tab releases it. Trees in front of
-the character fade, cliffs and deep water block movement, and fords slow the
-character and cover its feet with water and ripples.
+and Ctrl strolls. Space switches to management mode: the camera pulls back into
+a city-builder view that pans when the cursor nears the window borders (or with
+WASD / right-drag), while the character patrols and explores the surrounding
+area autonomously. Pressing Space again swoops the camera back to the character.
+Trees in front of the character fade, cliffs and deep water block movement, and
+fords slow the character and cover its feet with water and ripples.
 
 The figure is built and animated entirely in code, then painted into a small
 transparent texture every frame and drawn as a sprite. Soft filtering, flatter
@@ -80,13 +83,13 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 
 | Input | Action |
 |---|---|
-| WASD / arrows | move the character (Shift: sprint, Ctrl: stroll); pan in free camera |
-| Tab | switch between camera follow and free camera |
-| right- or middle-drag | pan in free camera |
-| mouse wheel | zoom about the character while following, or the cursor in free camera |
+| WASD / arrows | move the character (Shift: sprint, Ctrl: stroll); pan in management mode |
+| Space | switch between character-follow mode and management mode (autonomous character + city-builder camera) |
+| window borders / right- or middle-drag | pan in management mode |
+| mouse wheel | zoom about the character while following, or the cursor in management mode |
 | C / X / 1 | new seeded look / toggle hood / restore the hero |
-| R or Space | generate the next seed |
-| F / H | frame the whole map / return to the character (start area with `--no-character`) |
+| R | generate the next seed |
+| F / H | frame the whole map (in management mode) / centre on the character (start area with `--no-character`) |
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
