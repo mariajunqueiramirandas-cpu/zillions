@@ -2,6 +2,7 @@
 add_library(zl_world STATIC
   world/map_preview.cpp
   world/mapgen.cpp
+  world/scenery.cpp
   world/tilemap.cpp)
 target_include_directories(zl_world PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(zl_world PUBLIC zl_core PRIVATE zl_options)

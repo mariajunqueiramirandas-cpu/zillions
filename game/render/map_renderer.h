@@ -27,6 +27,7 @@ struct MapDrawOptions {
     f32 time = 0.0f;      // seconds; animates water
     bool grid = false;    // overlay tile boundaries
     bool shadows = true;
+    bool collisions = false;  // F3: show the physical object volumes
     MapOverlay overlay = MapOverlay::None;
 };
 
@@ -49,6 +50,7 @@ public:
     void draw(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_ground(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_scenery(const IsometricCamera& camera, f32 depth_begin, f32 depth_end, const SeeThrough* reveal = nullptr);
+    void draw_collisions(const IsometricCamera& camera);
     const ShadowView* shadow_view() const { return active_shadows_ ? &shadow_view_ : nullptr; }
     f32 depth_scale() const { return 1.0f / (static_cast<f32>(map_width_ + map_height_) + height_range_ * tiles_per_unit_ + 32.0f); }
     f32 ground_height(Vec2 position) const;
@@ -73,6 +75,9 @@ private:
     TerrainArt art_;
     Shader terrain_;
     Shader terrain_depth_, scenery_depth_;
+    Shader collision_lines_;
+    u32 collision_vao_ = 0, collision_buffer_ = 0;
+    std::vector<ObjectCollider> collision_geometry_;
     ShadowView shadow_view_;
     u32 shadow_fbo_ = 0, shadow_texture_ = 0, caster_vao_ = 0, caster_buffer_ = 0;
     bool shadows_valid_ = false;

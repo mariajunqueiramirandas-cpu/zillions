@@ -47,6 +47,7 @@ struct Options {
     MapOverlay overlay = MapOverlay::None;
     bool grid = false;
     bool shadows = true;
+    bool collisions = false;
     i32 rotation = 0;
 
     bool character = true;                  // put the player's character on the map
@@ -85,6 +86,7 @@ void usage() {
         "  --zoom PIXELS        pixels per tile\n"
         "  --rotation DEGREES   camera angle: 0, 90, 180 or 270\n"
         "  --no-shadows         disable cast shadows for comparisons\n"
+        "  --colliders          show object collision footprints and heights\n"
         "  --time SECONDS       screenshot animation time\n"
         "  --overlay MODE       debug view: height or pass\n"
         "  --grid               draw tile borders\n"
@@ -100,7 +102,7 @@ void usage() {
         "          Space management mode (border/WASD/right-drag pan, autonomous character),\n"
         "          Q/E rotate 90 degrees, C new look, X hood, 1 the hero's look,\n"
         "          R new map, V cycle overlay (height, passability), G grid,\n"
-        "          F whole map, H centre on character, F2 screenshot, F5 reload art,\n"
+        "          F whole map, H centre on character, F2 screenshot, F3 colliders, F5 reload art,\n"
         "          F6 painted/smooth character, Esc quit");
 }
 
@@ -132,6 +134,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (is("--whole-map")) o.whole_map = true;
         else if (is("--zoom")) o.zoom = static_cast<f32>(std::atof(next()));
         else if (is("--no-shadows")) o.shadows = false;
+        else if (is("--colliders")) o.collisions = true;
         else if (is("--rotation")) {
             const i32 degrees = std::atoi(next());
             if (degrees % 90 != 0) { usage(); return false; }
@@ -259,6 +262,7 @@ struct Scene {
         figures.draw(&item, 1, camera.plane_camera(), &camera, map.shadow_view(), map.depth_scale());
         glDepthMask(GL_TRUE);
         map.draw_scenery(camera, depth, 1.0e30f, &reveal);
+        if (options.collisions) map.draw_collisions(camera);
     }
 };
 
@@ -642,6 +646,7 @@ int main(int argc, char** argv) {
     draw.overlay = options.overlay;
     draw.grid = options.grid;
     draw.shadows = options.shadows;
+    draw.collisions = options.collisions;
 
     if (options.record_demo) return record_player_demo(scene, map, player, camera, draw, options) ? 0 : 1;
 
@@ -728,6 +733,7 @@ int main(int argc, char** argv) {
             camera.turn(in.pressed(Key::E) ? 1 : -1);
         }
         if (in.pressed(Key::G)) draw.grid = !draw.grid;
+        if (in.pressed(Key::F3)) draw.collisions = !draw.collisions;
         if (in.pressed(Key::V)) draw.overlay = static_cast<MapOverlay>((static_cast<int>(draw.overlay) + 1) % static_cast<int>(MapOverlay::Count));
         if (in.pressed(Key::F) && !follow) {
             frame_whole_map(camera, map, renderer);

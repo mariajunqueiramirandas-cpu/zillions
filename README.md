@@ -98,6 +98,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
+| F3 | inspect object collision footprints and height volumes |
 | F5 | reload ground textures and sprites without changing the map or camera |
 | F6 | switch the character between painted sprite and smooth rendering |
 
@@ -105,6 +106,12 @@ The painted art is read from `--assets DIR`, or by default from `./assets`, or
 failing that from the `assets` folder of the source tree the binary was built
 from. If the ground textures or the sprites cannot be loaded, the viewer says
 why and draws that group in code instead.
+
+Trees, boulders and deposits have world-space collision volumes shared with
+their rendered placements. Characters slide around trunks and rounded rock
+footprints; canopies and small ground cover remain walkable. See the
+[collision notes and contact previews](docs/collision.md). `--colliders` enables
+the same inspection overlay as F3 in screenshots.
 
 F5 repeats the same asset lookup, so edits can be checked without restarting.
 With automatic discovery, a local `assets` directory takes precedence even if

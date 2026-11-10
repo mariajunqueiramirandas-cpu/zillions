@@ -85,10 +85,12 @@ gear instead of letting the fingers disappear into them during the cycle.
 ## Movement and camera
 
 `Player::step` runs at 60 Hz. Input eases towards walk (1.5 m/s), jog (3 m/s) or
-sprint (5.2 m/s). A circle of radius 0.26 tiles must fit entirely on reachable,
-walkable terrain. Movement is subdivided into hops no longer than 0.08 tiles,
-with separate axis attempts to slide along obstacles. Cliffs use the map's
-existing level/ramp rule. Water, forest, mountains and rocks block the player.
+sprint (5.2 m/s). The body uses a 0.26-tile base radius, scaled by height and
+build. Shared scenery volumes block trunks, boulders and deposits at their
+actual positions. Swept contacts prevent tunnelling and slide along curved
+footprints; height intervals determine head clearance. Bushes and small ground
+cover remain walkable. Short terrain steps retain the map's level/ramp rule,
+map bounds, deep water and mountain barriers. See the [collision notes](collision.md).
 Fords cap the pace at jog speed, multiply it by 0.55 and ease water depth to
 0.24 m. Spawning on a ford starts at that depth immediately, including posed
 screenshots. Zero or invalid time steps leave the controller unchanged.

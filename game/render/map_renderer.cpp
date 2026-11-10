@@ -6,9 +6,7 @@
 #include <numeric>
 #include <string>
 
-#include "core/rng.h"
 #include "gfx/gl.h"
-#include "math/noise.h"
 #include "render/relief.h"
 
 namespace zl {
@@ -27,6 +25,8 @@ struct ShadowCaster {
     u16 u0, v0, u1, v1;
     f32 anchor;
 };
+
+struct CollisionVertex { Vec2 position; u32 color; };
 
 // The terrain shader hard-codes the texture-array layer that holds noise.
 static_assert(kNoiseLayer == 8, "update NOISE in the terrain shader");
@@ -327,10 +327,23 @@ void main() {
 }
 )";
 
-u32 tint(f32 brightness, f32 warmth) {
-    const auto channel = [](f32 v) { return static_cast<u8>(clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
-    return pack_color(channel(brightness * (1.0f + warmth)), channel(brightness), channel(brightness * (1.0f - warmth)));
+const char* kCollisionVertex = R"(#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec4 aColor;
+uniform vec4 uView;
+out vec4 vColor;
+void main() {
+    gl_Position = vec4(aPosition * uView.xy + uView.zw, 0.0, 1.0);
+    vColor = aColor;
 }
+)";
+
+const char* kCollisionFragment = R"(#version 330 core
+in vec4 vColor;
+out vec4 oColor;
+void main() { oColor = vColor; }
+)";
+
 
 }  // namespace
 
@@ -341,6 +354,8 @@ MapRenderer::~MapRenderer() {
     if (shadow_texture_) glDeleteTextures(1, &shadow_texture_);
     if (caster_vao_) glDeleteVertexArrays(1, &caster_vao_);
     if (caster_buffer_) glDeleteBuffers(1, &caster_buffer_);
+    if (collision_vao_) glDeleteVertexArrays(1, &collision_vao_);
+    if (collision_buffer_) glDeleteBuffers(1, &collision_buffer_);
 }
 
 void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
@@ -350,6 +365,7 @@ void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     terrain_.compile("terrain", kTerrainVertex, fragment.c_str());
     terrain_depth_.compile("terrain shadow depth", kTerrainVertex, kDepthFragment);
     scenery_depth_.compile("scenery shadow depth", kCasterVertex, kCasterFragment);
+    collision_lines_.compile("collision volumes", kCollisionVertex, kCollisionFragment);
     terrain_.bind();
     glUniform1i(terrain_.uniform("uTiles"), 0);
     glUniform1i(terrain_.uniform("uRelief"), 1);
@@ -414,6 +430,15 @@ void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     for (u32 i = 0; i < 4; ++i) glVertexAttribDivisor(i, 1);
     glBindVertexArray(0);
     batch_.init();
+    glGenVertexArrays(1, &collision_vao_);
+    glGenBuffers(1, &collision_buffer_);
+    glBindVertexArray(collision_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, collision_buffer_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(CollisionVertex), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(CollisionVertex), reinterpret_cast<void*>(offsetof(CollisionVertex, color)));
+    glBindVertexArray(0);
 }
 
 void MapRenderer::reload_art(JobSystem& jobs, const char* asset_dir) {
@@ -479,100 +504,26 @@ void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
 
 void MapRenderer::build_decor(const TileMap& map) {
     decor_.clear();
-    decor_.reserve(static_cast<size_t>(map.tile_count() / 3));
-    const u32 seed = static_cast<u32>(mix64(map.seed));
-
-    const auto add = [&](const SpriteSet& set, u32 pick, f32 gx, f32 gy, f32 scale, u32 color) {
-        const SpriteDef& d = art_.defs[static_cast<size_t>(set.first + static_cast<i32>(pick % static_cast<u32>(set.count)))];
-        SpriteInstance s;
-        // Offsets stay screen-aligned; the anchor itself lives in the world.
-        s.x = -d.anchor_x * scale;
-        s.y = -d.anchor_y * scale;
-        s.w = d.width * scale;
-        s.h = d.height * scale;
-        s.u0 = d.u0;
-        s.v0 = d.v0;
-        s.u1 = d.u1;
-        s.v1 = d.v1;
-        s.color = color;
-        s.anchor = d.anchor_y / d.height;
-        const bool casts = set.first == art_.broadleaf.first || set.first == art_.conifer.first ||
-            set.first == art_.bush.first || set.first == art_.stone.first || set.first == art_.iron.first ||
-            set.first == art_.gold.first || set.first == art_.boulder.first;
-        decor_.push_back({{gx, gy}, ground_height({gx, gy}), s, casts});
-    };
-
-    const f32 band = std::max(map.mountain_level - map.sea_level, 1.0e-4f);
-    f32 highest = map.mountain_level + 1.0e-4f;
-    for (const f32 e : map.elevation) highest = std::max(highest, e);
-
-    for (i32 y = 0; y < map.height; ++y) {
-        for (i32 x = 0; x < map.width; ++x) {
-            const size_t i = static_cast<size_t>(map.index(x, y));
-            // A handful of independent random numbers for this tile.
-            const u32 h0 = hash2(x, y, seed);
-            const u32 h1 = hash32(h0 ^ 0xA511E9B3u), h2 = hash32(h1 + 0x68E31DA4u), h3 = hash32(h2 + 0xB5297A4Du);
-            const f32 r0 = hash_to_unit(h0), r1 = hash_to_unit(h1), r2 = hash_to_unit(h2), r3 = hash_to_unit(h3);
-            const f32 cx = static_cast<f32>(x) + 0.5f, cy = static_cast<f32>(y) + 0.5f;
-
-            if (map.resource[i] != Resource::None) {
-                const SpriteSet& set = map.resource[i] == Resource::Stone ? art_.stone : (map.resource[i] == Resource::Iron ? art_.iron : art_.gold);
-                add(set, h3, cx + (r0 - 0.5f) * 0.2f, cy + 0.2f + (r1 - 0.5f) * 0.2f, 0.95f + 0.25f * r2, tint(0.94f + 0.06f * r3, 0.0f));
-                continue;
-            }
-
-            switch (map.terrain[i]) {
-                case Terrain::Forest: {
-                    // Conifers take over on higher, drier ground.
-                    const f32 altitude = (map.elevation[i] - map.sea_level) / band;
-                    const f32 conifer = smoothstep(0.45f, 0.80f, altitude + (0.5f - map.moisture[i]) * 0.5f);
-                    const int trees = r3 < 0.40f ? 2 : 1;
-                    for (int k = 0; k < trees; ++k) {
-                        const u32 hk = hash32(h3 + static_cast<u32>(k) * 0x9E3779B9u);
-                        const f32 a = hash_to_unit(hk), b = hash_to_unit(hash32(hk + 1)), c = hash_to_unit(hash32(hk + 2)), d = hash_to_unit(hash32(hk + 3));
-                        const bool is_conifer = hash_to_unit(hash32(hk + 4)) < conifer;
-                        add(is_conifer ? art_.conifer : art_.broadleaf, hash32(hk + 5), cx + (a - 0.5f) * 0.9f, cy + (b - 0.5f) * 0.9f,
-                            0.80f + 0.35f * c, tint(0.84f + 0.16f * d, (hash_to_unit(hash32(hk + 6)) - 0.5f) * 0.10f));
-                    }
-                    break;
-                }
-                case Terrain::Rocks: {
-                    add(art_.boulder, h3, cx + (r0 - 0.5f) * 0.5f, cy + 0.25f + (r1 - 0.5f) * 0.4f, 0.85f + 0.45f * r2, tint(0.88f + 0.12f * r3, 0.02f));
-                    break;
-                }
-                case Terrain::Grass: {
-                    bool waterside = false;
-                    for (int k = 0; k < 4 && !waterside; ++k) {
-                        const i32 nx = x + (k == 0) - (k == 1), ny = y + (k == 2) - (k == 3);
-                        waterside = map.in_bounds(nx, ny) && map.terrain[static_cast<size_t>(map.index(nx, ny))] == Terrain::Water;
-                    }
-                    // Ground cover grows in drifts rather than evenly: flower
-                    // meadows, thickets of shrubs and swathes of long grass.
-                    const f32 flowers = 0.015f + 0.34f * smoothstep(0.35f, 0.80f, simplex2(cx / 9.0f, cy / 9.0f, seed + 1u));
-                    const f32 shrubs = 0.006f + 0.16f * smoothstep(0.45f, 0.85f, simplex2(cx / 11.0f, cy / 11.0f, seed + 2u));
-                    const f32 grass = 0.07f + 0.34f * smoothstep(0.10f, 0.70f, simplex2(cx / 6.0f, cy / 6.0f, seed + 3u));
-                    const f32 gx = cx + (r1 - 0.5f) * 0.8f, gy = cy + (r2 - 0.5f) * 0.8f;
-                    if (waterside && r0 < 0.45f) add(art_.reed, h3, gx, gy, 0.9f + 0.3f * r3, tint(0.95f, 0.0f));
-                    else if (r0 < shrubs) add(art_.bush, h3, gx, gy, 0.9f + 0.4f * r3, tint(0.9f + 0.1f * r3, 0.0f));
-                    else if (r0 < shrubs + flowers) add(art_.flower, h3, gx, gy, 0.9f + 0.3f * r3, tint(1.0f, 0.0f));
-                    else if (r0 < shrubs + flowers + grass) add(art_.tuft, h3, gx, gy, 0.8f + 0.4f * r3, tint(0.92f + 0.08f * r3, 0.0f));
-                    break;
-                }
-                case Terrain::Dirt: {
-                    const f32 stones = 0.04f + 0.22f * smoothstep(0.30f, 0.80f, simplex2(cx / 7.0f, cy / 7.0f, seed + 4u));
-                    if (r0 < stones) add(art_.pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.5f * r3, tint(0.95f, 0.04f));
-                    else if (r0 < stones + 0.05f) add(art_.tuft, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.3f * r3, tint(0.9f, 0.08f));
-                    break;
-                }
-                case Terrain::Sand:
-                    if (r0 < 0.03f) add(art_.pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.7f + 0.4f * r3, tint(1.0f, 0.03f));
-                    break;
-                case Terrain::Shallows:
-                    if (r0 < 0.16f) add(art_.pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.9f + 0.5f * r3, tint(0.9f, -0.04f));
-                    break;
-                default: break;
-            }
-        }
+    Scenery fallback;
+    if (!map.scenery.ready) fallback = build_scenery(map);
+    const Scenery& scene = map.scenery.ready ? map.scenery : fallback;
+    collision_geometry_ = scene.colliders;
+    const SpriteSet* families[] = {&art_.broadleaf, &art_.conifer, &art_.bush, &art_.stone, &art_.iron, &art_.gold,
+                                   &art_.boulder, &art_.tuft, &art_.flower, &art_.pebble, &art_.reed};
+    decor_.reserve(scene.objects.size());
+    for (const SceneryObject& object : scene.objects) {
+        const SpriteSet& set = *families[static_cast<size_t>(object.kind)];
+        const SpriteDef& d = art_.defs[static_cast<size_t>(set.first) + object.variant % static_cast<u32>(set.count)];
+        SpriteInstance sprite;
+        sprite.x = -d.anchor_x * object.scale;
+        sprite.y = -d.anchor_y * object.scale;
+        sprite.w = d.width * object.scale;
+        sprite.h = d.height * object.scale;
+        sprite.u0 = d.u0; sprite.v0 = d.v0; sprite.u1 = d.u1; sprite.v1 = d.v1;
+        sprite.color = pack_color(object.color.r, object.color.g, object.color.b, object.color.a);
+        sprite.anchor = d.anchor_y / d.height;
+        const bool casts = scenery_blocks(object.kind) || object.kind == SceneryKind::Bush;
+        decor_.push_back({object.position, ground_height(object.position), sprite, casts});
     }
 
     for (i32 view = 0; view < 4; ++view) {
@@ -817,6 +768,50 @@ void MapRenderer::update_shadows(const IsometricCamera& camera) {
 void MapRenderer::draw(const IsometricCamera& camera, const MapDrawOptions& options) {
     draw_ground(camera, options);
     draw_scenery(camera, -1.0e30f, 1.0e30f);
+    if (options.collisions) draw_collisions(camera);
+}
+
+void MapRenderer::draw_collisions(const IsometricCamera& camera) {
+    std::vector<CollisionVertex> lines;
+    const u32 foot_color = pack_color(68, 218, 218), top_color = pack_color(242, 176, 74);
+    const auto line = [&](Vec2 a, f32 za, Vec2 b, f32 zb, u32 color) {
+        lines.push_back({camera.project(a, za), color});
+        lines.push_back({camera.project(b, zb), color});
+    };
+    constexpr i32 segments = 32;
+    for (const ObjectCollider& collider : collision_geometry_) {
+        const Vec2 centre = (collider.a + collider.b) * 0.5f;
+        const f32 bottom = surface_height(centre, camera.zoom);
+        const f32 top = bottom + collider.top - collider.bottom;
+        const Vec2 screen = camera.world_to_screen(centre, bottom);
+        const f32 margin = (collider.radius + length(collider.b - collider.a) + 0.1f) * camera.zoom;
+        if (screen.x + margin < 0 || screen.x - margin > camera.viewport.x || screen.y + margin < 0 ||
+            screen.y - (top - bottom) * IsometricCamera::kZ * camera.zoom - margin > camera.viewport.y) continue;
+        const auto outline = [&](i32 index) {
+            const f32 angle = static_cast<f32>(index) * 6.283185307f / static_cast<f32>(segments);
+            const Vec2 direction{std::cos(angle), std::sin(angle)};
+            return (dot(direction, collider.b - collider.a) >= 0 ? collider.b : collider.a) + direction * collider.radius;
+        };
+        for (i32 i = 0; i < segments; ++i) {
+            const Vec2 a = outline(i), b = outline(i + 1);
+            line(a, bottom, b, bottom, foot_color);
+            line(a, top, b, top, top_color);
+            if (i % 8 == 0) line(a, bottom, a, top, top_color);
+        }
+    }
+    if (lines.empty()) return;
+    collision_lines_.bind();
+    const Camera2D plane = camera.plane_camera();
+    const Vec2 scale = plane.clip_scale(), offset = plane.clip_offset();
+    glUniform4f(collision_lines_.uniform("uView"), scale.x, scale.y, offset.x, offset.y);
+    // Inspection overlay: keep the physical footprint visible through crowns.
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glBindVertexArray(collision_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, collision_buffer_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(lines.size() * sizeof(CollisionVertex)), lines.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lines.size()));
+    glBindVertexArray(0);
 }
 
 void MapRenderer::draw_ground(const IsometricCamera& camera, const MapDrawOptions& options) {

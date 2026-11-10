@@ -2,9 +2,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
 
 #include "core/jobs.h"
 #include "actor/human.h"
+#include "actor/player.h"
 #include "gfx/gl.h"
 #include "gfx/render_target.h"
 #include "platform/window.h"
@@ -327,6 +331,90 @@ void check_isometric_figures(MapRenderer& renderer, JobSystem& jobs) {
     glDisable(GL_DEPTH_TEST);
     CHECK(glGetError() == GL_NO_ERROR);
 }
+
+void check_collision_rendering(MapRenderer& renderer, JobSystem& jobs) {
+    TileMap map = fixture(1);
+    std::fill(map.level.begin(), map.level.end(), 0);
+    std::fill(map.terrain.begin(), map.terrain.end(), Terrain::Dirt);
+    map.terrain[static_cast<size_t>(map.index(23, 31))] = Terrain::Forest;
+    map.terrain[static_cast<size_t>(map.index(27, 34))] = Terrain::Rocks;
+    map.resource[static_cast<size_t>(map.index(29, 31))] = Resource::Stone;
+    RenderTarget target;
+    target.create(800, 600);
+    IsometricCamera camera;
+    camera.viewport = {800, 600};
+    camera.center = {23.5f, 31.5f};
+    camera.zoom = 96;
+    // Populating simulation scenery must not shift or duplicate anything that
+    // the viewer previously generated internally for a hand-authored map.
+    renderer.set_map(map, jobs);
+    camera.center_height = renderer.surface_height(camera.center, camera.zoom);
+    target.bind(); renderer.draw(camera, MapDrawOptions{});
+    const Image before = target.read_pixels();
+    map.scenery = build_scenery(map);
+    renderer.set_map(map, jobs);
+    target.bind(); renderer.draw(camera, MapDrawOptions{});
+    CHECK(same_image(before, target.read_pixels()));
+    CHECK(renderer.decor_count() == map.scenery.objects.size());
+
+    FigureRenderer figures;
+    figures.init();
+    const char* capture = std::getenv("ZL_COLLISION_CAPTURE_DIR");
+    if (capture) std::filesystem::create_directories(capture);
+    bool seen_tree = false, seen_rock = false, seen_ore = false;
+    for (const ObjectCollider& collider : map.scenery.colliders) {
+        const SceneryObject& object = map.scenery.objects[collider.object];
+        const bool tree = object.kind == SceneryKind::Broadleaf || object.kind == SceneryKind::Conifer;
+        const bool rock = object.kind == SceneryKind::Boulder;
+        if ((tree && seen_tree) || (rock && seen_rock) || (!tree && !rock && seen_ore)) continue;
+        if (tree) seen_tree = true; else if (rock) seen_rock = true; else seen_ore = true;
+        Player player;
+        CHECK(player.spawn(map, object.position - Vec2{2, 0}));
+        for (i32 tick = 0; tick < 150; ++tick) {
+            player.step(map, {{1, 0}, true, false}, 1.0f / 60.0f);
+            CHECK(can_stand(map, player.position(), player.body_radius(), player.body_height()));
+        }
+        CHECK(player.position().x < collider.a.x);
+        CHECK(player.motion().speed < 0.01f);
+        Figure figure;
+        build_human(player.look, player.motion(), figure);
+        for (i32 rotation = 0; rotation < 4; ++rotation) {
+            camera.rotation = rotation;
+            camera.center = object.position;
+            camera.center_height = renderer.surface_height(object.position, camera.zoom) + 0.8f;
+            target.bind();
+            MapDrawOptions options;
+            renderer.draw_ground(camera, options);
+            const Vec2 depth = camera.rotate(player.position());
+            renderer.draw_scenery(camera, -1.0e30f, depth.x + depth.y);
+            const FigureDraw item{&figure, player.position(), 0, 0, renderer.surface_height(player.position(), camera.zoom)};
+            glEnable(GL_DEPTH_TEST); glDepthMask(GL_FALSE);
+            figures.draw(&item, 1, camera.plane_camera(), &camera, renderer.shadow_view(), renderer.depth_scale());
+            glDepthMask(GL_TRUE);
+            const Vec2 standing = camera.project(player.position(), item.height);
+            SeeThrough reveal{{1.0e9f, 1.0e9f}, {-1.0e9f, -1.0e9f}};
+            for (const FigurePart& part : figure.parts) for (const Vec3 p : {part.a, part.b}) {
+                const Vec2 q = standing + camera.project({p.x, p.y}, p.z - figure.waterline);
+                const f32 radius = std::max(part.ra, part.rb);
+                reveal.lo.x = std::min(reveal.lo.x, q.x - radius); reveal.lo.y = std::min(reveal.lo.y, q.y - radius);
+                reveal.hi.x = std::max(reveal.hi.x, q.x + radius); reveal.hi.y = std::max(reveal.hi.y, q.y + radius);
+            }
+            renderer.draw_scenery(camera, depth.x + depth.y, 1.0e30f, &reveal);
+            renderer.draw_collisions(camera);
+            const Image image = target.read_pixels();
+            i32 wires = 0;
+            for (const Color color : image.pixels) if (color.g > 180 && color.b > 180 && color.r < 100) ++wires;
+            CHECK(wires > 30);
+            if (capture) {
+                const std::string name = tree ? "tree" : (rock ? "rock" : "ore");
+                const std::string path = (std::filesystem::path(capture) / ("collision-" + name + "-" + std::to_string(rotation * 90) + ".png")).string();
+                CHECK(write_png(path.c_str(), image));
+            }
+        }
+    }
+    CHECK(seen_tree && seen_rock && seen_ore);
+    CHECK(glGetError() == GL_NO_ERROR);
+}
 }  // namespace
 
 int main() {
@@ -339,6 +427,7 @@ int main() {
     JobSystem jobs(4);
     MapRenderer renderer;
     renderer.init(jobs, ZL_ASSET_DIR);
+    check_collision_rendering(renderer, jobs);
     check_shadows(renderer, jobs);
     check_world(renderer, jobs);
     check_isometric_figures(renderer, jobs);

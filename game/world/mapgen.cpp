@@ -1411,6 +1411,7 @@ TileMap generate_map(const MapGenParams& params, JobSystem& jobs) {
     map.level.assign(n, 0);
 
     Generator(params, jobs, map).run();
+    map.scenery = build_scenery(map);
     map.stats.gen_ms = timer.millis();
     return map;
 }

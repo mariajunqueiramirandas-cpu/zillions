@@ -15,6 +15,9 @@ ground. In management mode, F frames the entire silhouette and H returns to
 the character. Space switches between management and character-follow mode.
 Movement follows screen directions after every quarter turn.
 
+Object collision uses shared world-space trunk and rock volumes. **F3** shows
+their physical footprints and height ranges; see the [collision notes](collision.md).
+
 The title bar shows the current angle. Key presses come from queued GLFW
 events, so a brief tap survives a slow rendered frame and holding Q or E does
 not repeatedly rotate the camera.
