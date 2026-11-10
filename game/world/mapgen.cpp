@@ -1,9 +1,8 @@
 #include "world/mapgen.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
-#include <functional>
-#include <queue>
 #include <utility>
 #include <vector>
 
@@ -22,6 +21,68 @@ constexpr f32 kDiag = 1.41421356f;
 // 4-neighbourhood first, then the diagonals.
 constexpr i32 kDx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
 constexpr i32 kDy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+
+// Monotone priority queue for the river flood. Keys only increase: the flood
+// pops the lowest (level, tile) pair and pushes neighbours at a strictly
+// higher level. A radix heap gives O(1) amortised operations and keeps the
+// exact (level, index) order of the binary heap it replaces.
+class MonotoneQueue {
+public:
+    bool empty() const { return size_ == 0; }
+
+    void push(f32 level, i32 index) {
+        const u64 key = make_key(level, index);
+        ZL_ASSERT(key >= last_);
+        buckets_[bucket_of(key)].push_back(key);
+        ++size_;
+    }
+
+    u64 pop() {
+        if (buckets_[0].empty()) refill();
+        const u64 key = buckets_[0].back();
+        buckets_[0].pop_back();
+        --size_;
+        return key;
+    }
+
+    static i32 index_of(u64 key) { return static_cast<i32>(static_cast<u32>(key)); }
+
+    static f32 level_of(u64 key) {
+        const u32 ordered = static_cast<u32>(key >> 32);
+        const u32 bits = (ordered & 0x80000000u) ? (ordered & 0x7fffffffu) : ~ordered;
+        return std::bit_cast<f32>(bits);
+    }
+
+private:
+    static constexpr int kBuckets = 65;
+
+    static u64 make_key(f32 level, i32 index) {
+        if (level == 0.0f) level = 0.0f;  // -0.0 and +0.0 compare equal
+        const u32 bits = std::bit_cast<u32>(level);
+        const u32 ordered = (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+        return (static_cast<u64>(ordered) << 32) | static_cast<u32>(index);
+    }
+
+    int bucket_of(u64 key) const {
+        if (key == last_) return 0;
+        return 64 - std::countl_zero(key ^ last_);
+    }
+
+    void refill() {
+        int b = 1;
+        while (b < kBuckets && buckets_[b].empty()) ++b;
+        ZL_ASSERT(b < kBuckets);
+        u64 next = buckets_[b][0];
+        for (const u64 key : buckets_[b]) next = std::min(next, key);
+        last_ = next;
+        for (const u64 key : buckets_[b]) buckets_[bucket_of(key)].push_back(key);
+        buckets_[b].clear();
+    }
+
+    std::vector<u64> buckets_[kBuckets];
+    u64 last_ = 0;
+    size_t size_ = 0;
+};
 
 // Every length in the generator is given in world units and multiplied by the
 // map's resolution to get tiles, so a map keeps its geography when the grid is
@@ -85,6 +146,7 @@ Components label_components(i32 w, i32 h, Pred&& member, Link&& linked) {
     Components c;
     c.label.assign(static_cast<size_t>(w * h), -1);
     std::vector<i32> stack;
+    stack.reserve(static_cast<size_t>(w * h));
     for (i32 seed = 0; seed < w * h; ++seed) {
         if (c.label[static_cast<size_t>(seed)] != -1 || !member(seed)) continue;
         const i32 id = static_cast<i32>(c.size.size());
@@ -359,8 +421,7 @@ private:
         std::vector<i32> order;
         order.reserve(static_cast<size_t>(n_));
 
-        using Node = std::pair<f32, i32>;
-        std::priority_queue<Node, std::vector<Node>, std::greater<Node>> open;
+        MonotoneQueue open;
 
         const u32 s_meander = seed(14), s_jitter = seed(8);
         jobs_.parallel_for(h_, 8, [&](i32 y0, i32 y1) {
@@ -377,24 +438,34 @@ private:
                 }
             }
         });
-        for (i32 y = 0; y < h_; ++y) {
-            for (i32 x = 0; x < w_; ++x) {
-                const size_t i = at(x, y);
-                if (!closed[i]) continue;
-                // Only outlets that touch unvisited land need to seed the flood.
-                bool frontier = false;
-                for (int k = 0; k < 8 && !frontier; ++k) {
-                    const i32 nx = x + kDx[k], ny = y + kDy[k];
-                    frontier = inside(nx, ny) && !closed[at(nx, ny)];
+        constexpr i32 kSeedGrain = 16;
+        const i32 seed_chunks = (h_ + kSeedGrain - 1) / kSeedGrain;
+        std::vector<std::vector<i32>> seeds(static_cast<size_t>(seed_chunks));
+        jobs_.parallel_for(h_, kSeedGrain, [&](i32 y0, i32 y1) {
+            std::vector<i32>& out = seeds[static_cast<size_t>(y0 / kSeedGrain)];
+            for (i32 y = y0; y < y1; ++y) {
+                for (i32 x = 0; x < w_; ++x) {
+                    const size_t i = at(x, y);
+                    if (!closed[i]) continue;
+                    // Only outlets that touch unvisited land need to seed the flood.
+                    bool frontier = false;
+                    for (int k = 0; k < 8 && !frontier; ++k) {
+                        const i32 nx = x + kDx[k], ny = y + kDy[k];
+                        frontier = inside(nx, ny) && !closed[at(nx, ny)];
+                    }
+                    if (frontier) out.push_back(static_cast<i32>(i));
                 }
-                if (frontier) open.push({level[i], static_cast<i32>(i)});
             }
+        });
+        for (const std::vector<i32>& chunk : seeds) {
+            for (const i32 i : chunk) open.push(level[static_cast<size_t>(i)], i);
         }
 
         const f32 flat_step = 0.004f * band / rf_;
         while (!open.empty()) {
-            const auto [lv, i] = open.top();
-            open.pop();
+            const u64 key = open.pop();
+            const f32 lv = MonotoneQueue::level_of(key);
+            const i32 i = MonotoneQueue::index_of(key);
             const i32 x = i % w_, y = i / w_;
             for (int k = 0; k < 8; ++k) {
                 const i32 nx = x + kDx[k], ny = y + kDy[k];
@@ -407,7 +478,7 @@ private:
                 // front and drain it in straight parallel lines. A small
                 // random rise per step makes those paths wander and merge.
                 level[j] = std::max(level[j], lv + flat_step * (0.25f + hash_to_unit(hash2(nx, ny, s_jitter + 1))));
-                open.push({level[j], static_cast<i32>(j)});
+                open.push(level[j], static_cast<i32>(j));
                 order.push_back(static_cast<i32>(j));
             }
         }
@@ -527,17 +598,29 @@ private:
         const f32 target = 0.5f * (band_lo + band_hi);
         const u32 s_warp = seed(16);
         const i32 r = tiles(kStartBlend + 8.0f);
-        for (i32 y = std::max(0, m_.start.y - r); y <= std::min(h_ - 1, m_.start.y + r); ++y) {
-            for (i32 x = std::max(0, m_.start.x - r); x <= std::min(w_ - 1, m_.start.x + r); ++x) {
-                // The edge of the levelled area is warped by noise; a clean
-                // circle would show up as a perfectly round cliff.
-                const f32 warp = 7.0f * fbm2(static_cast<f32>(x) / (13.0f * rf_), static_cast<f32>(y) / (13.0f * rf_), s_warp, 2);
-                const f32 k = 1.0f - smoothstep(kStartFlat + 3.0f, kStartBlend, start_dist(x, y) + warp);
-                smooth[at(x, y)] = lerp(smooth[at(x, y)], target, k);
+        constexpr i32 kGrain = 16;
+        const i32 warp_y0 = std::max(0, m_.start.y - r), warp_y1 = std::min(h_ - 1, m_.start.y + r);
+        jobs_.parallel_for(warp_y1 - warp_y0 + 1, 8, [&](i32 row0, i32 row1) {
+            for (i32 row = row0; row < row1; ++row) {
+                const i32 y = warp_y0 + row;
+                for (i32 x = std::max(0, m_.start.x - r); x <= std::min(w_ - 1, m_.start.x + r); ++x) {
+                    // The edge of the levelled area is warped by noise; a clean
+                    // circle would show up as a perfectly round cliff.
+                    const f32 warp = 7.0f * fbm2(static_cast<f32>(x) / (13.0f * rf_), static_cast<f32>(y) / (13.0f * rf_), s_warp, 2);
+                    const f32 k = 1.0f - smoothstep(kStartFlat + 3.0f, kStartBlend, start_dist(x, y) + warp);
+                    smooth[at(x, y)] = lerp(smooth[at(x, y)], target, k);
+                }
             }
-        }
+        });
 
-        for (i32 i = 0; i < n_; ++i) m_.level[static_cast<size_t>(i)] = level_of(smooth[static_cast<size_t>(i)]);
+        jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+            for (i32 y = y0; y < y1; ++y) {
+                for (i32 x = 0; x < w_; ++x) {
+                    const size_t k = at(x, y);
+                    m_.level[k] = level_of(smooth[k]);
+                }
+            }
+        });
 
         // A median over a window two units in radius removes ledges only a unit
         // or two wide, which would be all cliff and no plateau. The median is
@@ -547,15 +630,26 @@ private:
         std::vector<u8> settled(static_cast<size_t>(n_), 0);
         std::vector<f32> at_or_below(static_cast<size_t>(n_));
         for (int l = 0; l < kHeightLevels - 1; ++l) {
-            for (i32 i = 0; i < n_; ++i) at_or_below[static_cast<size_t>(i)] = level(i) <= l ? 1.0f : 0.0f;
-            box_blur(at_or_below, w_, h_, 2 * r_, jobs_);
-            for (i32 i = 0; i < n_; ++i) {
-                const size_t k = static_cast<size_t>(i);
-                if (!settled[k] && at_or_below[k] > 0.5f) {
-                    filtered[k] = static_cast<u8>(l);
-                    settled[k] = 1;
+            jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+                for (i32 y = y0; y < y1; ++y) {
+                    for (i32 x = 0; x < w_; ++x) {
+                        const size_t k = at(x, y);
+                        at_or_below[k] = level(static_cast<i32>(k)) <= l ? 1.0f : 0.0f;
+                    }
                 }
-            }
+            });
+            box_blur(at_or_below, w_, h_, 2 * r_, jobs_);
+            jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+                for (i32 y = y0; y < y1; ++y) {
+                    for (i32 x = 0; x < w_; ++x) {
+                        const size_t k = at(x, y);
+                        if (!settled[k] && at_or_below[k] > 0.5f) {
+                            filtered[k] = static_cast<u8>(l);
+                            settled[k] = 1;
+                        }
+                    }
+                }
+            });
         }
         m_.level.swap(filtered);
 
@@ -566,12 +660,23 @@ private:
         const f32 min_ledge = 9.0f * rf_;
         std::vector<f32> to_lower(static_cast<size_t>(n_));
         for (int l = kHeightLevels - 1; l >= 1; --l) {
-            for (i32 i = 0; i < n_; ++i) to_lower[static_cast<size_t>(i)] = level(i) < l ? 0.0f : kInf;
+            jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+                for (i32 y = y0; y < y1; ++y) {
+                    for (i32 x = 0; x < w_; ++x) {
+                        const size_t k = at(x, y);
+                        to_lower[k] = level(static_cast<i32>(k)) < l ? 0.0f : kInf;
+                    }
+                }
+            });
             chamfer_distance(to_lower, w_, h_);
-            for (i32 i = 0; i < n_; ++i) {
-                const size_t k = static_cast<size_t>(i);
-                if (level(i) == l && to_lower[k] + to_rock_[k] < min_ledge) m_.level[k] = static_cast<u8>(l - 1);
-            }
+            jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+                for (i32 y = y0; y < y1; ++y) {
+                    for (i32 x = 0; x < w_; ++x) {
+                        const size_t k = at(x, y);
+                        if (level(static_cast<i32>(k)) == l && to_lower[k] + to_rock_[k] < min_ledge) m_.level[k] = static_cast<u8>(l - 1);
+                    }
+                }
+            });
         }
 
         // Terraces too small to build on or defend are absorbed by their surroundings.
@@ -580,6 +685,7 @@ private:
             const Components terraces = label_components(
                 w_, h_, [](i32) { return true; }, [&](i32 a, i32 b) { return level(a) == level(b); });
             std::vector<i32> replacement(terraces.size.size(), -1);
+            bool changed = false;
             for (i32 y = 0; y < h_; ++y) {
                 for (i32 x = 0; x < w_; ++x) {
                     const i32 i = static_cast<i32>(at(x, y));
@@ -591,15 +697,22 @@ private:
                         const i32 j = static_cast<i32>(at(nx, ny));
                         if (terraces.label[static_cast<size_t>(j)] != static_cast<i32>(id)) {
                             replacement[id] = level(j);
+                            changed = true;
                             break;
                         }
                     }
                 }
             }
-            for (i32 i = 0; i < n_; ++i) {
-                const i32 to = replacement[static_cast<size_t>(terraces.label[static_cast<size_t>(i)])];
-                if (to >= 0) m_.level[static_cast<size_t>(i)] = static_cast<u8>(to);
-            }
+            if (!changed) break;
+            jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+                for (i32 y = y0; y < y1; ++y) {
+                    for (i32 x = 0; x < w_; ++x) {
+                        const size_t k = at(x, y);
+                        const i32 to = replacement[static_cast<size_t>(terraces.label[k])];
+                        if (to >= 0) m_.level[k] = static_cast<u8>(to);
+                    }
+                }
+            });
         }
     }
 
@@ -636,14 +749,24 @@ private:
             return true;
         };
 
-        std::vector<Candidate> candidates;
-        for (i32 y = 0; y < h_; ++y) {
-            for (i32 x = 0; x < w_; ++x) {
-                for (int dir = 0; dir < 4; ++dir) {
-                    if (fits(x, y, dir)) candidates.push_back({hash2(x, y, s_ramp + static_cast<u32>(dir)), x, y, dir});
+        constexpr i32 kGrain = 16;
+        const i32 chunks = (h_ + kGrain - 1) / kGrain;
+        std::vector<std::vector<Candidate>> found(static_cast<size_t>(chunks));
+        jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+            std::vector<Candidate>& out = found[static_cast<size_t>(y0 / kGrain)];
+            for (i32 y = y0; y < y1; ++y) {
+                for (i32 x = 0; x < w_; ++x) {
+                    for (int dir = 0; dir < 4; ++dir) {
+                        if (fits(x, y, dir)) out.push_back({hash2(x, y, s_ramp + static_cast<u32>(dir)), x, y, dir});
+                    }
                 }
             }
-        }
+        });
+        std::vector<Candidate> candidates;
+        size_t total = 0;
+        for (const std::vector<Candidate>& chunk : found) total += chunk.size();
+        candidates.reserve(total);
+        for (const std::vector<Candidate>& chunk : found) candidates.insert(candidates.end(), chunk.begin(), chunk.end());
         std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
             return a.key != b.key ? a.key < b.key : (a.y != b.y ? a.y < b.y : (a.x != b.x ? a.x < b.x : a.dir < b.dir));
         });
@@ -691,63 +814,80 @@ private:
 
         const u32 s_beach = seed(9), s_fray = seed(17), s_mottle = seed(22);
         std::vector<f32> forest_score(static_cast<size_t>(n_), -kInf);
+        std::vector<f32> moisture(static_cast<size_t>(n_));
+        constexpr i32 kGrain = 16;
+        jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+            for (i32 y = y0; y < y1; ++y) {
+                for (i32 x = 0; x < w_; ++x) {
+                    const size_t i = at(x, y);
+                    if (is_water(static_cast<i32>(i))) continue;
+                    if (rock_[i]) {
+                        m_.terrain[i] = Terrain::Mountain;
+                        continue;
+                    }
+                    // Beaches vary from nothing to a few units wide along the shore.
+                    if (to_lake[i] < 4.5f * rf_) {
+                        const f32 width = 3.6f * rf_ * saturate(0.45f + 0.75f * fbm2(static_cast<f32>(x) / (17.0f * rf_), static_cast<f32>(y) / (17.0f * rf_), s_beach, 2));
+                        if (to_lake[i] <= width) {
+                            m_.terrain[i] = Terrain::Sand;
+                            continue;
+                        }
+                    }
+                    // Trees grow in groves (mid-frequency noise) biased to wet ground,
+                    // and thin out towards the colony so there is room to build.
+                    const f32 d = start_dist(x, y);
+                    const f32 clearing = 1.0f - smoothstep(kStartClear, kStartFlat + 3.0f, d);
+                    // A last octave at the scale of a few tiles frays the edge of
+                    // every wood into bays, spurs and outlying stands.
+                    const f32 fray = fbm2(static_cast<f32>(x) / 7.0f, static_cast<f32>(y) / 7.0f, s_fray, 2);
+                    forest_score[i] = 0.55f * m_.moisture[i] + 0.45f * (0.5f + 0.5f * grove_[i]) + 0.07f * fray - 0.6f * clearing;
+                    moisture[i] = m_.moisture[i];
+                }
+            }
+        });
+
+        // Compact in row-major order, exactly as the serial pass did. The
+        // percentile only needs the multiset, but keeping the order makes the
+        // generated map bit-identical to the previous implementation.
         std::vector<f32> scores, dryness;
         scores.reserve(static_cast<size_t>(n_));
         dryness.reserve(static_cast<size_t>(n_));
-
-        for (i32 y = 0; y < h_; ++y) {
-            for (i32 x = 0; x < w_; ++x) {
-                const size_t i = at(x, y);
-                if (is_water(static_cast<i32>(i))) continue;
-                if (rock_[i]) {
-                    m_.terrain[i] = Terrain::Mountain;
-                    continue;
-                }
-                // Beaches vary from nothing to a few units wide along the shore.
-                if (to_lake[i] < 4.5f * rf_) {
-                    const f32 width = 3.6f * rf_ * saturate(0.45f + 0.75f * fbm2(static_cast<f32>(x) / (17.0f * rf_), static_cast<f32>(y) / (17.0f * rf_), s_beach, 2));
-                    if (to_lake[i] <= width) {
-                        m_.terrain[i] = Terrain::Sand;
-                        continue;
-                    }
-                }
-                // Trees grow in groves (mid-frequency noise) biased to wet ground,
-                // and thin out towards the colony so there is room to build.
-                const f32 d = start_dist(x, y);
-                const f32 clearing = 1.0f - smoothstep(kStartClear, kStartFlat + 3.0f, d);
-                // A last octave at the scale of a few tiles frays the edge of
-                // every wood into bays, spurs and outlying stands.
-                const f32 fray = fbm2(static_cast<f32>(x) / 7.0f, static_cast<f32>(y) / 7.0f, s_fray, 2);
-                forest_score[i] = 0.55f * m_.moisture[i] + 0.45f * (0.5f + 0.5f * grove_[i]) + 0.07f * fray - 0.6f * clearing;
-                scores.push_back(forest_score[i]);
-                dryness.push_back(m_.moisture[i]);
-            }
+        for (i32 i = 0; i < n_; ++i) {
+            const size_t k = static_cast<size_t>(i);
+            if (forest_score[k] == -kInf) continue;
+            scores.push_back(forest_score[k]);
+            dryness.push_back(moisture[k]);
         }
 
         const f32 forest_cut = p_.forest > 0.0f ? percentile(scores, 1.0f - p_.forest) : kInf;
         const f32 dry_cut = percentile(dryness, 0.10f);
-        for (i32 i = 0; i < n_; ++i) {
-            const size_t k = static_cast<size_t>(i);
-            if (forest_score[k] == -kInf) continue;
-            if (forest_score[k] >= forest_cut) {
-                m_.terrain[k] = Terrain::Forest;
-                continue;
+        jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+            for (i32 y = y0; y < y1; ++y) {
+                for (i32 x = 0; x < w_; ++x) {
+                    const size_t k = at(x, y);
+                    if (forest_score[k] == -kInf) continue;
+                    if (forest_score[k] >= forest_cut) {
+                        m_.terrain[k] = Terrain::Forest;
+                        continue;
+                    }
+                    // Dry ground and turf interleave at the scale of a few tiles: grass
+                    // creeps into the bare patches and bare earth shows through the grass.
+                    const f32 mottle = fbm2(static_cast<f32>(x) / 8.0f, static_cast<f32>(y) / 8.0f, s_mottle, 2);
+                    const bool bare = m_.moisture[k] + 0.09f * mottle < dry_cut || fbm2(static_cast<f32>(x) / 6.0f, static_cast<f32>(y) / 6.0f, s_mottle + 1, 2) > 0.70f;
+                    m_.terrain[k] = bare ? Terrain::Dirt : Terrain::Grass;
+                }
             }
-            // Dry ground and turf interleave at the scale of a few tiles: grass
-            // creeps into the bare patches and bare earth shows through the grass.
-            const f32 x = static_cast<f32>(i % w_), y = static_cast<f32>(i / w_);
-            const f32 mottle = fbm2(x / 8.0f, y / 8.0f, s_mottle, 2);
-            const bool bare = m_.moisture[k] + 0.09f * mottle < dry_cut || fbm2(x / 6.0f, y / 6.0f, s_mottle + 1, 2) > 0.70f;
-            m_.terrain[k] = bare ? Terrain::Dirt : Terrain::Grass;
-        }
+        });
 
         // Scree: bare ground along the foot of mountains.
-        for (i32 y = 0; y < h_; ++y) {
-            for (i32 x = 0; x < w_; ++x) {
-                const size_t i = at(x, y);
-                if (m_.terrain[i] == Terrain::Grass && to_rock_[i] <= 1.5f * rf_ && unit(x, y, 10) <= 0.6f) m_.terrain[i] = Terrain::Dirt;
+        jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
+            for (i32 y = y0; y < y1; ++y) {
+                for (i32 x = 0; x < w_; ++x) {
+                    const size_t i = at(x, y);
+                    if (m_.terrain[i] == Terrain::Grass && to_rock_[i] <= 1.5f * rf_ && unit(x, y, 10) <= 0.6f) m_.terrain[i] = Terrain::Dirt;
+                }
             }
-        }
+        });
     }
 
     // --- small features ---------------------------------------------------
