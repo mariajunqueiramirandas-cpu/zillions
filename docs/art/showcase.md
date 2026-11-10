@@ -1,10 +1,10 @@
 # Generated artwork showcase
 
 Seven ground textures and forty scenery sprites, generated with the image model
-using the [plague-era painting brief](../art-direction.md). This is an artwork
-delivery for review. The viewer still draws its procedural placeholders; image
-loading, runtime premultiplication, atlas upload and shader colour changes remain
-the separate integration task described in that brief.
+using the [plague-era painting brief](../art-direction.md). The viewer now
+loads these files, premultiplies the sprites into its atlas, and uses shader
+colours tuned to them; see the screenshots in the [README](../../README.md).
+The sheets below show the assets on their own, outside the renderer.
 
 ## Ground
 

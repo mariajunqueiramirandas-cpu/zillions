@@ -37,7 +37,9 @@ public:
     MapRenderer(const MapRenderer&) = delete;
     MapRenderer& operator=(const MapRenderer&) = delete;
 
-    void init(JobSystem& jobs);
+    // `asset_dir` is where the painted art lives (see load_terrain_art); null
+    // draws placeholder art in code.
+    void init(JobSystem& jobs, const char* asset_dir = nullptr);
     void set_map(const TileMap& map, JobSystem& jobs);
     void draw(const Camera2D& camera, const MapDrawOptions& options);
 

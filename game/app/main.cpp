@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 
 #include "core/clock.h"
@@ -24,6 +25,7 @@ struct Options {
     i32 width = 1600;
     i32 height = 900;
     bool vsync = true;
+    const char* assets = nullptr;      // directory holding the painted art; null = look for it
     const char* screenshot = nullptr;  // render one frame to this PNG and exit
     bool bench = false;                // time the renderer off-screen and exit
     f32 zoom = 0.0f;                   // pixels per tile; 0 = default for the view
@@ -43,6 +45,7 @@ void usage() {
         "  --resolution N       tiles per world unit: 1, 2 or 4 (default 2)\n"
         "  --width W --height H window or screenshot size in pixels\n"
         "  --no-vsync           uncap the frame rate\n"
+        "  --assets DIR         directory with the painted art (default: ./assets)\n"
         "  --screenshot FILE    render one frame to a PNG and exit\n"
         "  --bench              time the renderer off-screen and exit\n"
         "  --whole-map          frame the entire map (default: the start area)\n"
@@ -65,6 +68,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (is("--width")) o.width = std::atoi(next());
         else if (is("--height")) o.height = std::atoi(next());
         else if (is("--no-vsync")) o.vsync = false;
+        else if (is("--assets")) o.assets = next();
         else if (is("--screenshot")) o.screenshot = next();
         else if (is("--bench")) o.bench = true;
         else if (is("--whole-map")) o.whole_map = true;
@@ -95,6 +99,19 @@ bool parse(int argc, char** argv, Options& o) {
         return false;
     }
     return true;
+}
+
+// The directory holding the painted art: the one asked for, else ./assets,
+// else the copy in the source tree this binary was built from. Empty if there
+// is none, in which case the renderer draws placeholder art in code.
+std::string find_assets(const char* requested) {
+    if (requested) return requested;
+    std::error_code error;
+    if (std::filesystem::is_directory("assets/ground", error)) return "assets";
+#ifdef ZL_ASSET_DIR
+    if (std::filesystem::is_directory(ZL_ASSET_DIR "/ground", error)) return ZL_ASSET_DIR;
+#endif
+    return {};
 }
 
 f32 fit_zoom(const TileMap& map, Vec2 viewport) {
@@ -223,9 +240,13 @@ int main(int argc, char** argv) {
 
     MapRenderer renderer;
     {
+        const std::string assets = find_assets(options.assets);
+        if (assets.empty()) ZL_LOG("art: no assets directory found; drawing placeholder art in code");
         const Stopwatch timer;
-        renderer.init(jobs);
-        ZL_LOG("generated art in %.1f ms", timer.millis());
+        renderer.init(jobs, assets.empty() ? nullptr : assets.c_str());
+        const TerrainArt& art = renderer.art();
+        ZL_LOG("art: %s ground, %s sprites, ready in %.1f ms", art.painted_ground ? "painted" : "placeholder",
+               art.painted_sprites ? "painted" : "placeholder", timer.millis());
     }
 
     TileMap map = generate_map(options.map, jobs);

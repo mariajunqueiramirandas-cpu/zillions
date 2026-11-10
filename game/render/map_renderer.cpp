@@ -50,6 +50,15 @@ const float WATER = 0.0, SHALLOWS = 1.0, GRASS = 3.0, FOREST = 5.0, MOUNTAIN = 6
 const float GROUND_SCALE = 1.0 / 8.0;
 const vec3 LIGHT = vec3(-0.5013, -0.6216, 0.6016);
 const vec3 BACKDROP = vec3(0.030, 0.036, 0.046);
+// Colours the shader supplies itself, chosen to sit with the painted art
+// (see "Colours the shader owns" in docs/art-direction.md).
+const vec3 WATER_SHORE = vec3(0.37, 0.46, 0.41);
+const vec3 WATER_MID = vec3(0.22, 0.32, 0.30);
+const vec3 WATER_DEEP = vec3(0.10, 0.16, 0.17);
+const vec3 WATER_GLINT = vec3(0.52, 0.50, 0.40);   // light patterns on the surface, tinted bone
+const vec3 FOAM = vec3(0.78, 0.77, 0.67);          // scum along the shoreline
+const vec3 SCRUB = vec3(0.72, 0.74, 0.46);         // sallow growth on mountain foothills
+const vec3 HAZE = vec3(0.56, 0.53, 0.47);          // smoke in the air
 
 float tileId(ivec2 c) { return floor(texelFetch(uTiles, c, 0).r * 255.0 + 0.5); }
 
@@ -106,12 +115,12 @@ void main() {
     vec2 drift = uTime * vec2(0.020, 0.013);
     float caustic = texture(uGround, vec3(p / 5.0 + drift, WATER)).r * texture(uGround, vec3(p / 3.3 - drift.yx + 0.31, WATER)).g;
     float ripple = texture(uGround, vec3(p / 2.3 + drift * 2.0, WATER)).b - 0.5;
-    vec3 waterColor = mix(mix(vec3(0.25, 0.56, 0.60), vec3(0.12, 0.37, 0.56), smoothstep(0.0, 2.2, depth)),
-                          vec3(0.055, 0.19, 0.39), smoothstep(1.8, 8.0, depth));
-    waterColor *= 1.0 + ripple * 0.14;
-    waterColor += vec3(0.50, 0.62, 0.56) * caustic * 1.5 * (1.0 - 0.75 * smoothstep(1.0, 6.0, depth));
+    // Still, murky water: grey-green at the shore, near-black green in the deeps.
+    vec3 waterColor = mix(mix(WATER_SHORE, WATER_MID, smoothstep(0.0, 1.6, depth)), WATER_DEEP, smoothstep(1.4, 7.0, depth));
+    waterColor *= 1.0 + ripple * 0.12;
+    waterColor += WATER_GLINT * caustic * 0.75 * (1.0 - 0.75 * smoothstep(1.0, 6.0, depth));
     vec3 bed = texture(uGround, vec3(uv, SHALLOWS)).rgb;
-    vec3 shallowColor = mix(bed, vec3(0.30, 0.60, 0.62), 0.42) + vec3(0.45, 0.55, 0.50) * caustic * 2.0;
+    vec3 shallowColor = mix(bed, WATER_SHORE, 0.38) * 1.10 + WATER_GLINT * caustic * 1.0;
 
     // --- land ---
     vec3 g0 = groundColor(id.x, uv, moisture);
@@ -144,7 +153,7 @@ void main() {
     vec3 rockTint = mix(mix(vec3(0.92, 0.88, 0.72), vec3(1.02, 1.00, 0.96), smoothstep(0.0, 0.30, altitude)),
                         vec3(1.20, 1.19, 1.20), smoothstep(0.30, 0.95, altitude)) * rockLight;
     float scrub = (1.0 - smoothstep(0.03, 0.20, altitude + (noise.b - 0.5) * 0.10)) * (0.35 + 0.5 * moisture);
-    rockTint = mix(rockTint, vec3(0.62, 0.82, 0.42), scrub);
+    rockTint = mix(rockTint, SCRUB, scrub);
 
     // Damp, darker ground at the water's edge.
     float damp = smoothstep(0.08, 0.5, water + shallows);
@@ -162,10 +171,15 @@ void main() {
     vec3 face = texture(uGround, vec3(uv * 2.0, MOUNTAIN)).rgb * 2.0 * vec3(0.72, 0.67, 0.58) * rockLight * strata;
     color = mix(color, face * shade, cliff * (1.0 - smoothstep(0.2, 0.6, water)));
 
-    // Foam breathing along the shoreline.
+    // Scum breathing along the shoreline.
     float shore = smoothstep(0.30, 0.5, water) * (1.0 - smoothstep(0.5, 0.82, water)) * (1.0 - smoothstep(0.0, 0.3, shallows));
     float foam = shore * (0.55 + 0.45 * sin(uTime * 1.3 + noise.a * 12.0 + p.x * 0.7));
-    color = mix(color, vec3(0.92, 0.97, 0.98), foam * 0.5);
+    color = mix(color, FOAM, foam * 0.35);
+
+    // An overcast, smoke-stained light over everything: a little colour
+    // drained from the ground and a thin warm-grey haze laid on top.
+    color = mix(vec3(dot(color, vec3(0.299, 0.587, 0.114))), color, 0.86);
+    color = mix(color, HAZE, 0.06);
 
     vec2 fromEdge = abs(fract(p) - 0.5);
     float line = smoothstep(0.5 - 1.5 * uPixel, 0.5, max(fromEdge.x, fromEdge.y));
@@ -221,8 +235,8 @@ MapRenderer::~MapRenderer() {
     if (vao_) glDeleteVertexArrays(1, &vao_);
 }
 
-void MapRenderer::init(JobSystem& jobs) {
-    art_ = build_terrain_art(jobs);
+void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
+    art_ = load_terrain_art(jobs, asset_dir);
     ground_.create_array(art_.ground, TextureFilter::Trilinear, TextureWrap::Repeat);
     sprites_.create(art_.sprites, TextureFilter::Trilinear, TextureWrap::Clamp);
     // The CPU copies are only needed for upload.

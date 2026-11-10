@@ -2,7 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <memory>
+#include <string>
+#include <utility>
 
 #include "core/jobs.h"
 #include "core/rng.h"
@@ -225,8 +226,9 @@ public:
         }
     }
 
-    // Writes the downsampled, premultiplied result into `target` at (ox, oy).
-    void blit(Image& target, i32 ox, i32 oy) const {
+    // The downsampled result, with premultiplied alpha.
+    Image to_image() const {
+        Image target(width_, height_);
         const i32 sw = width_ * kSamples;
         const f32 norm = 1.0f / (kSamples * kSamples);
         for (i32 y = 0; y < height_; ++y) {
@@ -241,9 +243,10 @@ public:
                         sum.a += s.a;
                     }
                 }
-                target.at(ox + x, oy + y) = {to_byte(sum.r * norm), to_byte(sum.g * norm), to_byte(sum.b * norm), to_byte(sum.a * norm)};
+                target.at(x, y) = {to_byte(sum.r * norm), to_byte(sum.g * norm), to_byte(sum.b * norm), to_byte(sum.a * norm)};
             }
         }
+        return target;
     }
 
 private:
@@ -496,95 +499,57 @@ Canvas make_tuft(Rng& rng, int kind) {
     return canvas;
 }
 
-// --- atlas packing ----------------------------------------------------------
+// --- sprite families --------------------------------------------------------
 
-class AtlasBuilder {
-public:
-    explicit AtlasBuilder(TerrainArt& art, i32 size) : art_(art) { art_.sprites = Image(size, size, Color{0, 0, 0, 0}); }
+enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed, Boulder };
 
-    // Adds a sprite whose ground contact point is (anchor_x, anchor_y) in pixels.
-    void add(SpriteSet& set, const Canvas& canvas, f32 anchor_x, f32 anchor_y) {
-        constexpr i32 kPad = 4;  // keeps neighbours from bleeding in at lower mip levels
-        const i32 size = art_.sprites.width;
-        if (x_ + canvas.width() + kPad > size) {
-            x_ = kPad;
-            y_ += row_height_ + kPad;
-            row_height_ = 0;
-        }
-        ZL_CHECK(y_ + canvas.height() + kPad <= size, "sprite atlas is full");
-        canvas.blit(art_.sprites, x_, y_);
-
-        const auto norm = [size](i32 v) { return static_cast<u16>(static_cast<f32>(v) / static_cast<f32>(size) * 65535.0f + 0.5f); };
-        const f32 tile = static_cast<f32>(kArtTilePixels);
-        SpriteDef def;
-        def.u0 = norm(x_);
-        def.v0 = norm(y_);
-        def.u1 = norm(x_ + canvas.width());
-        def.v1 = norm(y_ + canvas.height());
-        def.width = static_cast<f32>(canvas.width()) / tile;
-        def.height = static_cast<f32>(canvas.height()) / tile;
-        def.anchor_x = anchor_x / tile;
-        def.anchor_y = anchor_y / tile;
-        if (set.count == 0) set.first = static_cast<i32>(art_.defs.size());
-        ++set.count;
-        art_.defs.push_back(def);
-
-        x_ += canvas.width() + kPad;
-        row_height_ = std::max(row_height_, canvas.height());
-    }
-
-private:
-    TerrainArt& art_;
-    i32 x_ = 4, y_ = 4, row_height_ = 0;
+struct Family {
+    const char* name;  // file name stem: sprites/<name>_<variant>.png
+    Kind kind;
+    SpriteSet TerrainArt::* set;
+    int variants;
+    i32 width, height;       // canvas in pixels
+    f32 anchor_x, anchor_y;  // ground contact point in canvas pixels
 };
 
-}  // namespace
+// A SpriteSet is a contiguous range, so each family's variants stay together.
+// Sizes and anchors are the ones given in docs/art-direction.md.
+const Family kFamilies[] = {
+    {"broadleaf", Kind::Broadleaf, &TerrainArt::broadleaf, 6, 64, 76, 32.0f, 66.0f},
+    {"conifer", Kind::Conifer, &TerrainArt::conifer, 4, 44, 80, 22.0f, 71.0f},
+    {"bush", Kind::Bush, &TerrainArt::bush, 3, 34, 26, 17.0f, 20.0f},
+    {"stone", Kind::Stone, &TerrainArt::stone, 3, 46, 40, 23.0f, 27.0f},
+    {"iron", Kind::Iron, &TerrainArt::iron, 3, 46, 40, 23.0f, 27.0f},
+    {"gold", Kind::Gold, &TerrainArt::gold, 3, 46, 40, 23.0f, 27.0f},
+    {"tuft", Kind::Tuft, &TerrainArt::tuft, 4, 20, 16, 10.0f, 14.0f},
+    {"flower", Kind::Flower, &TerrainArt::flower, 4, 20, 16, 10.0f, 14.0f},
+    {"pebble", Kind::Pebble, &TerrainArt::pebble, 3, 22, 14, 11.0f, 9.0f},
+    {"reed", Kind::Reed, &TerrainArt::reed, 3, 20, 30, 10.0f, 28.0f},
+    {"boulder", Kind::Boulder, &TerrainArt::boulder, 4, 46, 44, 23.0f, 31.0f},
+};
 
-TerrainArt build_terrain_art(JobSystem& jobs, u32 seed) {
-    TerrainArt art;
+struct SpriteItem {
+    const Family* family;
+    int variant;
+};
 
-    // Every texture and sprite is independent, so they are drawn in parallel.
-    const i32 ground_size = kArtTilePixels * kGroundRepeatTiles;
-    art.ground.resize(static_cast<size_t>(kTerrainCount) + 1);
-    jobs.parallel_for(kTerrainCount + 1, 1, [&](i32 begin, i32 end) {
-        for (i32 t = begin; t < end; ++t) {
-            art.ground[static_cast<size_t>(t)] = t == kNoiseLayer ? make_noise_layer(ground_size, seed + 4242u)
-                                                                  : make_ground(static_cast<Terrain>(t), ground_size, seed + static_cast<u32>(t) * 977u);
-        }
-    });
-
-    enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed, Boulder };
-    struct Family {
-        Kind kind;
-        SpriteSet TerrainArt::* set;
-        int variants;
-        f32 anchor_x, anchor_y;  // ground contact point in sprite pixels
-    };
-    // A SpriteSet is a contiguous range, so each family's variants stay together.
-    const Family families[] = {
-        {Kind::Broadleaf, &TerrainArt::broadleaf, 6, 32.0f, 66.0f}, {Kind::Conifer, &TerrainArt::conifer, 4, 22.0f, 71.0f},
-        {Kind::Bush, &TerrainArt::bush, 3, 17.0f, 20.0f},           {Kind::Stone, &TerrainArt::stone, 3, 23.0f, 27.0f},
-        {Kind::Iron, &TerrainArt::iron, 3, 23.0f, 27.0f},           {Kind::Gold, &TerrainArt::gold, 3, 23.0f, 27.0f},
-        {Kind::Tuft, &TerrainArt::tuft, 4, 10.0f, 14.0f},           {Kind::Flower, &TerrainArt::flower, 4, 10.0f, 14.0f},
-        {Kind::Pebble, &TerrainArt::pebble, 3, 11.0f, 9.0f},        {Kind::Reed, &TerrainArt::reed, 3, 10.0f, 28.0f},
-        {Kind::Boulder, &TerrainArt::boulder, 4, 23.0f, 31.0f},
-    };
-    struct Item {
-        const Family* family;
-        int variant;
-    };
-    std::vector<Item> items;
-    for (const Family& family : families) {
+std::vector<SpriteItem> sprite_items() {
+    std::vector<SpriteItem> items;
+    for (const Family& family : kFamilies) {
         for (int v = 0; v < family.variants; ++v) items.push_back({&family, v});
     }
+    return items;
+}
 
-    std::vector<std::unique_ptr<Canvas>> canvases(items.size());
+// Draws every sprite in code. Results are premultiplied and in sprite_items() order.
+std::vector<Image> draw_sprites(JobSystem& jobs, const std::vector<SpriteItem>& items, u32 seed) {
+    std::vector<Image> images(items.size());
     jobs.parallel_for(static_cast<i32>(items.size()), 1, [&](i32 begin, i32 end) {
         for (i32 i = begin; i < end; ++i) {
             // Each sprite has its own random stream, so results do not depend on scheduling.
             Rng rng(mix64(seed) + static_cast<u64>(i) * 0x9E3779B97F4A7C15ull);
-            const Item& item = items[static_cast<size_t>(i)];
-            Canvas canvas = [&]() -> Canvas {
+            const SpriteItem& item = items[static_cast<size_t>(i)];
+            const Canvas canvas = [&]() -> Canvas {
                 switch (item.family->kind) {
                     case Kind::Broadleaf: return make_broadleaf(rng, item.variant);
                     case Kind::Conifer: return make_conifer(rng);
@@ -600,16 +565,160 @@ TerrainArt build_terrain_art(JobSystem& jobs, u32 seed) {
                 }
                 return Canvas(1, 1);
             }();
-            canvases[static_cast<size_t>(i)] = std::make_unique<Canvas>(std::move(canvas));
+            images[static_cast<size_t>(i)] = canvas.to_image();
         }
     });
+    return images;
+}
+
+// --- art files --------------------------------------------------------------
+
+// File name stem of a terrain's ground texture, or null for layers that are
+// shader data and always generated.
+const char* ground_file(Terrain terrain) {
+    switch (terrain) {
+        case Terrain::Shallows: return "shallows";
+        case Terrain::Sand: return "sand";
+        case Terrain::Grass: return "grass";
+        case Terrain::Dirt: return "dirt";
+        case Terrain::Forest: return "forest";
+        case Terrain::Mountain: return "mountain";
+        case Terrain::Rocks: return "rocks";
+        case Terrain::Water:
+        case Terrain::Count: break;
+    }
+    return nullptr;
+}
+
+// Reads every ground texture into its layer of `layers`. All or nothing: on
+// any problem `layers` is left untouched.
+bool load_ground(const std::string& dir, i32 size, std::vector<Image>& layers) {
+    std::vector<Image> loaded(layers.size());
+    for (int t = 0; t < kTerrainCount; ++t) {
+        const char* name = ground_file(static_cast<Terrain>(t));
+        if (!name) continue;
+        const std::string path = dir + "/ground/" + name + ".png";
+        Image& image = loaded[static_cast<size_t>(t)];
+        if (!read_png(path.c_str(), image)) {
+            ZL_LOG("art: cannot read %s; drawing the ground in code", path.c_str());
+            return false;
+        }
+        if (image.width != size || image.height != size) {
+            ZL_LOG("art: %s is %dx%d, expected %dx%d; drawing the ground in code", path.c_str(), image.width, image.height, size, size);
+            return false;
+        }
+        for (Color& c : image.pixels) c.a = 255;
+    }
+    for (size_t t = 0; t < loaded.size(); ++t) {
+        if (loaded[t].width > 0) layers[t] = std::move(loaded[t]);
+    }
+    return true;
+}
+
+// Reads every sprite, in sprite_items() order, and premultiplies its alpha.
+// All or nothing, like load_ground().
+bool load_sprites(const std::string& dir, const std::vector<SpriteItem>& items, std::vector<Image>& images) {
+    std::vector<Image> loaded(items.size());
+    for (size_t i = 0; i < items.size(); ++i) {
+        const Family& family = *items[i].family;
+        const std::string path = dir + "/sprites/" + family.name + "_" + std::to_string(items[i].variant) + ".png";
+        Image& image = loaded[i];
+        if (!read_png(path.c_str(), image)) {
+            ZL_LOG("art: cannot read %s; drawing the sprites in code", path.c_str());
+            return false;
+        }
+        // The anchors and the atlas layout assume the canvas sizes in the brief.
+        if (image.width != family.width || image.height != family.height) {
+            ZL_LOG("art: %s is %dx%d, expected %dx%d; drawing the sprites in code", path.c_str(), image.width, image.height, family.width, family.height);
+            return false;
+        }
+        for (Color& c : image.pixels) {
+            const u32 a = c.a;
+            c.r = static_cast<u8>((c.r * a + 127u) / 255u);
+            c.g = static_cast<u8>((c.g * a + 127u) / 255u);
+            c.b = static_cast<u8>((c.b * a + 127u) / 255u);
+        }
+    }
+    images = std::move(loaded);
+    return true;
+}
+
+// --- atlas packing ----------------------------------------------------------
+
+class AtlasBuilder {
+public:
+    explicit AtlasBuilder(TerrainArt& art, i32 size) : art_(art) { art_.sprites = Image(size, size, Color{0, 0, 0, 0}); }
+
+    // Adds a premultiplied sprite whose ground contact point is (anchor_x, anchor_y) in pixels.
+    void add(SpriteSet& set, const Image& sprite, f32 anchor_x, f32 anchor_y) {
+        constexpr i32 kPad = 4;  // keeps neighbours from bleeding in at lower mip levels
+        const i32 size = art_.sprites.width;
+        if (x_ + sprite.width + kPad > size) {
+            x_ = kPad;
+            y_ += row_height_ + kPad;
+            row_height_ = 0;
+        }
+        ZL_CHECK(y_ + sprite.height + kPad <= size, "sprite atlas is full");
+        for (i32 y = 0; y < sprite.height; ++y) {
+            std::copy_n(&sprite.at(0, y), sprite.width, &art_.sprites.at(x_, y_ + y));
+        }
+
+        const auto norm = [size](i32 v) { return static_cast<u16>(static_cast<f32>(v) / static_cast<f32>(size) * 65535.0f + 0.5f); };
+        const f32 tile = static_cast<f32>(kArtTilePixels);
+        SpriteDef def;
+        def.u0 = norm(x_);
+        def.v0 = norm(y_);
+        def.u1 = norm(x_ + sprite.width);
+        def.v1 = norm(y_ + sprite.height);
+        def.width = static_cast<f32>(sprite.width) / tile;
+        def.height = static_cast<f32>(sprite.height) / tile;
+        def.anchor_x = anchor_x / tile;
+        def.anchor_y = anchor_y / tile;
+        if (set.count == 0) set.first = static_cast<i32>(art_.defs.size());
+        ++set.count;
+        art_.defs.push_back(def);
+
+        x_ += sprite.width + kPad;
+        row_height_ = std::max(row_height_, sprite.height);
+    }
+
+private:
+    TerrainArt& art_;
+    i32 x_ = 4, y_ = 4, row_height_ = 0;
+};
+
+}  // namespace
+
+TerrainArt load_terrain_art(JobSystem& jobs, const char* asset_dir, u32 seed) {
+    TerrainArt art;
+    const std::string dir = asset_dir ? asset_dir : "";
+
+    const i32 ground_size = kArtTilePixels * kGroundRepeatTiles;
+    art.ground.resize(static_cast<size_t>(kTerrainCount) + 1);
+    art.painted_ground = !dir.empty() && load_ground(dir, ground_size, art.ground);
+    // Whatever did not come from a file is drawn here. Every layer is
+    // independent, so they are drawn in parallel.
+    jobs.parallel_for(kTerrainCount + 1, 1, [&](i32 begin, i32 end) {
+        for (i32 t = begin; t < end; ++t) {
+            Image& layer = art.ground[static_cast<size_t>(t)];
+            if (t == kNoiseLayer) layer = make_noise_layer(ground_size, seed + 4242u);
+            else if (layer.width == 0) layer = make_ground(static_cast<Terrain>(t), ground_size, seed + static_cast<u32>(t) * 977u);
+        }
+    });
+
+    const std::vector<SpriteItem> items = sprite_items();
+    std::vector<Image> images;
+    art.painted_sprites = !dir.empty() && load_sprites(dir, items, images);
+    if (!art.painted_sprites) images = draw_sprites(jobs, items, seed);
 
     AtlasBuilder atlas(art, 1024);
     for (size_t i = 0; i < items.size(); ++i) {
         const Family& family = *items[i].family;
-        atlas.add(art.*(family.set), *canvases[i], family.anchor_x, family.anchor_y);
+        atlas.add(art.*(family.set), images[i], family.anchor_x, family.anchor_y);
     }
     return art;
 }
+
+TerrainArt build_terrain_art(JobSystem& jobs, u32 seed) { return load_terrain_art(jobs, nullptr, seed); }
 
 }  // namespace zl

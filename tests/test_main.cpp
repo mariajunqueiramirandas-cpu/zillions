@@ -3,13 +3,18 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <iterator>
+#include <string>
 #include <vector>
 
 #include "core/clock.h"
+#include "core/image.h"
 #include "core/jobs.h"
 #include "core/rng.h"
 #include "gfx/camera2d.h"
 #include "math/noise.h"
+#include "render/terrain_art.h"
 #include "world/mapgen.h"
 
 using namespace zl;
@@ -316,6 +321,109 @@ TEST(mapgen_resolution_keeps_the_geography) {
     const f64 ratio = static_cast<f64>(b.stats.walkable_tiles) / a.stats.walkable_tiles;
     CHECK(ratio > 13.0 && ratio < 19.0);
     CHECK(b.stats.buildable_near_start > 10 * a.stats.buildable_near_start);
+}
+
+// --- art ----------------------------------------------------------------------
+
+bool same_pixels(const Image& a, const Image& b) {
+    if (a.width != b.width || a.height != b.height) return false;
+    for (size_t i = 0; i < a.pixels.size(); ++i) {
+        const Color& p = a.pixels[i];
+        const Color& q = b.pixels[i];
+        if (p.r != q.r || p.g != q.g || p.b != q.b || p.a != q.a) return false;
+    }
+    return true;
+}
+
+TEST(png_round_trips) {
+    Image image(37, 21);
+    for (i32 y = 0; y < image.height; ++y) {
+        for (i32 x = 0; x < image.width; ++x) {
+            const u32 h = hash2(x, y, 11u);
+            image.at(x, y) = {static_cast<u8>(h), static_cast<u8>(h >> 8), static_cast<u8>(h >> 16), static_cast<u8>(h >> 24)};
+        }
+    }
+    const std::string path = (std::filesystem::temp_directory_path() / "zl_test_round_trip.png").string();
+    CHECK(write_png(path.c_str(), image));
+    Image back;
+    CHECK(read_png(path.c_str(), back));
+    CHECK(same_pixels(image, back));
+    std::filesystem::remove(path);
+
+    // A missing file is reported and leaves the image alone.
+    CHECK(!read_png(path.c_str(), back));
+    CHECK(same_pixels(image, back));
+}
+
+void check_art_is_well_formed(const TerrainArt& art) {
+    CHECK(art.ground.size() == static_cast<size_t>(kTerrainCount) + 1);
+    for (const Image& layer : art.ground) {
+        CHECK(layer.width == kArtTilePixels * kGroundRepeatTiles && layer.height == layer.width);
+    }
+
+    const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush,   &TerrainArt::stone,
+                                            &TerrainArt::iron,      &TerrainArt::gold,    &TerrainArt::tuft,   &TerrainArt::flower,
+                                            &TerrainArt::pebble,    &TerrainArt::reed,    &TerrainArt::boulder};
+    const int counts[] = {6, 4, 3, 3, 3, 3, 4, 4, 3, 3, 4};
+    int total = 0;
+    for (size_t i = 0; i < std::size(sets); ++i) {
+        const SpriteSet& set = art.*sets[i];
+        CHECK(set.count == counts[i]);
+        CHECK(set.first >= 0 && set.first + set.count <= static_cast<i32>(art.defs.size()));
+        total += set.count;
+    }
+    CHECK(static_cast<size_t>(total) == art.defs.size());
+
+    for (const SpriteDef& def : art.defs) {
+        CHECK(def.u1 > def.u0 && def.v1 > def.v0);
+        CHECK(def.anchor_x > 0.0f && def.anchor_x < def.width && def.anchor_y > 0.0f && def.anchor_y < def.height);
+        // Every sprite has something in it.
+        const f32 scale = static_cast<f32>(art.sprites.width) / 65535.0f;
+        bool visible = false;
+        for (i32 y = static_cast<i32>(def.v0 * scale); y < static_cast<i32>(def.v1 * scale) && !visible; ++y) {
+            for (i32 x = static_cast<i32>(def.u0 * scale); x < static_cast<i32>(def.u1 * scale) && !visible; ++x) visible = art.sprites.at(x, y).a > 128;
+        }
+        CHECK(visible);
+    }
+
+    // The atlas is drawn with premultiplied alpha: no colour can exceed its coverage.
+    bool premultiplied = true;
+    for (const Color& c : art.sprites.pixels) premultiplied = premultiplied && c.r <= c.a && c.g <= c.a && c.b <= c.a;
+    CHECK(premultiplied);
+}
+
+TEST(painted_art_loads_from_files) {
+    JobSystem jobs(4);
+    const TerrainArt painted = load_terrain_art(jobs, ZL_ASSET_DIR);
+    CHECK(painted.painted_ground);
+    CHECK(painted.painted_sprites);
+    check_art_is_well_formed(painted);
+
+    const TerrainArt drawn = build_terrain_art(jobs);
+    CHECK(!drawn.painted_ground && !drawn.painted_sprites);
+    check_art_is_well_formed(drawn);
+
+    // Files replace the placeholders, except for the layers that are shader data.
+    const auto layer = [](const TerrainArt& art, int index) -> const Image& { return art.ground[static_cast<size_t>(index)]; };
+    CHECK(!same_pixels(layer(painted, static_cast<int>(Terrain::Grass)), layer(drawn, static_cast<int>(Terrain::Grass))));
+    CHECK(!same_pixels(painted.sprites, drawn.sprites));
+    CHECK(same_pixels(layer(painted, static_cast<int>(Terrain::Water)), layer(drawn, static_cast<int>(Terrain::Water))));
+    CHECK(same_pixels(layer(painted, kNoiseLayer), layer(drawn, kNoiseLayer)));
+    for (const Color& c : layer(painted, static_cast<int>(Terrain::Grass)).pixels) CHECK(c.a == 255);
+}
+
+TEST(art_falls_back_to_placeholders_without_files) {
+    JobSystem jobs(4);
+    const std::string missing = (std::filesystem::temp_directory_path() / "zl_test_no_such_assets").string();
+    const TerrainArt fallback = load_terrain_art(jobs, missing.c_str());
+    CHECK(!fallback.painted_ground && !fallback.painted_sprites);
+    check_art_is_well_formed(fallback);
+
+    // The placeholders do not depend on how many threads drew them.
+    JobSystem single(1);
+    const TerrainArt drawn = build_terrain_art(single);
+    CHECK(same_pixels(fallback.sprites, drawn.sprites));
+    for (size_t i = 0; i < drawn.ground.size(); ++i) CHECK(same_pixels(fallback.ground[i], drawn.ground[i]));
 }
 
 }  // namespace
