@@ -37,6 +37,9 @@ constexpr Vec2 kShadowOnScreen{kShadowOnGround.x, kFigureUpScale + kShadowOnGrou
 constexpr f32 kRippleRadius = 0.80f;
 constexpr f32 kMarkerRadius = 0.62f;
 constexpr f32 kMarkerPixels = 13.0f;
+// A live sprite has a finite authoring resolution, like the scenery, rather
+// than revealing ever-smaller geometric details as the camera zooms in.
+constexpr f32 kPaintedPixelsPerTile = 64.0f;
 
 struct FigureInstance {
     f32 x, y, w, h;                   // quad, in tiles
@@ -68,6 +71,7 @@ uniform float uPixel;     // tiles per screen pixel
 uniform vec2 uShadow;     // screen offset of a shadow per tile of height
 uniform vec2 uProjection; // depth and up scales, shared with the CPU projection
 uniform vec3 uGround;     // ripple radius, marker radius, marker radius in pixels
+uniform bool uPainted;
 in vec2 vLocal;
 flat in vec4 vInfo;
 flat in int vRow;
@@ -172,6 +176,7 @@ vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, ou
     group = tint.a;
 
     vec2 slope = off / max(r, 1.0e-5) * more.z;
+    if (uPainted) slope *= 0.72; // flatter painted forms, less cylindrical lighting
     float steep = dot(slope, slope);
     if (steep > 0.97) slope *= sqrt(0.97 / steep);
     vec3 n = vec3(slope, sqrt(1.0 - dot(slope, slope)));
@@ -187,13 +192,13 @@ vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, ou
     float dab = noise(q * vec2(24.0, 58.0) + seed) - 0.5;
     float grain = material == CLOTH ? 0.30 : (material == LEATHER ? 0.20 : 0.10);
     if (material == HAIR) {
-        dab = noise(q * vec2(8.0, 170.0) + seed) - 0.5;  // strands
-        grain = 0.62;
+        dab = noise(q * (uPainted ? vec2(10.0, 85.0) : vec2(8.0, 170.0)) + seed) - 0.5;
+        grain = uPainted ? 0.32 : 0.62;
     }
     light += dab * grain;
     if (shadowed && (code & 16) == 0) {
         float z = mix(size.z, size.w, t) + sqrt(max(r * r - dot(off, off), 0.0));
-        light = mix(light, min(light, -0.25), occlusion(p, z, count, water));
+        light = mix(light, min(light, -0.25), occlusion(p, z, count, water) * (uPainted ? 0.62 : 1.0));
     }
 
     vec3 base = tint.rgb;
@@ -216,7 +221,10 @@ vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, ou
         high = BONE;
         gloss = 1.0;
     }
-    const float W = 0.04;
+    // Broader transitions and quieter highlights read as pigment rather than
+    // separate glossy tubes, while retaining the material colours.
+    if (uPainted) gloss *= 0.55;
+    float W = uPainted ? 0.10 : 0.04;
     vec3 c = mix(dark, half_tone, smoothstep(0.02 - W, 0.02 + W, light));
     c = mix(c, base, smoothstep(0.40 - W, 0.40 + W, light));
     c = mix(c, high, gloss * smoothstep(0.84 - W, 0.84 + W, light));
@@ -306,6 +314,7 @@ void main() {
     // shadow side against something that is not the same surface.
     float edgeWidth = max(0.012, 0.8 * aa);
     float edge = smoothstep(-edgeWidth, -0.35 * edgeWidth, d1) * rim1 * 0.86;
+    if (uPainted) edge *= 0.60;
     vec3 color = c1;
     if (second >= 0) {
         float d2, g2, rim2;
@@ -348,6 +357,9 @@ void FigureRenderer::init() {
     glUniform3f(shader_.uniform("uGround"), kRippleRadius, kMarkerRadius, kMarkerPixels);
     u_view_ = shader_.uniform("uView");
     u_pixel_ = shader_.uniform("uPixel");
+    u_painted_ = shader_.uniform("uPainted");
+    sprites_.init();
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture_size_);
 
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
@@ -371,8 +383,11 @@ void FigureRenderer::init() {
 }
 
 void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& camera) {
+    draw_calls_ = 0;
     if (count == 0) return;
-    const f32 pixel = 1.0f / camera.zoom;
+    const bool painted = style_ == FigureStyle::Painted;
+    const f32 raster_zoom = painted ? std::min(camera.zoom, kPaintedPixelsPerTile) : camera.zoom;
+    const f32 pixel = 1.0f / raster_zoom;
     const Vec2 view_lo = camera.visible_min(), view_hi = camera.visible_max();
 
     std::vector<FigureInstance> instances;
@@ -427,6 +442,12 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
         const f32 margin = 2.0f * pixel;
         lo -= Vec2{margin, margin};
         hi += Vec2{margin, margin};
+        if (painted) {
+            // Keep the texel grid anchored to the feet, not to pose bounds or
+            // camera position, so changing silhouettes do not shift the image.
+            lo = {std::floor(lo.x * raster_zoom) * pixel, std::floor(lo.y * raster_zoom) * pixel};
+            hi = {std::ceil(hi.x * raster_zoom) * pixel, std::ceil(hi.y * raster_zoom) * pixel};
+        }
 
         const Vec2 world_lo = item.position + lo, world_hi = item.position + hi;
         if (world_hi.x < view_lo.x || world_hi.y < view_lo.y || world_lo.x > view_hi.x || world_lo.y > view_hi.y) {
@@ -460,23 +481,91 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
     }
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kRowTexels, used_rows, GL_RGBA, GL_FLOAT, texels_.data());
 
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     const u32 wanted = static_cast<u32>(instances.size());
+    // Render the visible poses together into padded atlas cells. The atlas
+    // grows as needed and stays on the GPU; no images are read back or saved.
+    i32 cell_width = 0, cell_height = 0;
+    for (const FigureInstance& item : instances) {
+        cell_width = std::max(cell_width, static_cast<i32>(std::lround(item.w * raster_zoom)) + 2);
+        cell_height = std::max(cell_height, static_cast<i32>(std::lround(item.h * raster_zoom)) + 2);
+    }
+    const i32 columns = std::max(1, static_cast<i32>(std::ceil(std::sqrt(static_cast<f32>(wanted)))));
+    const i32 rows = static_cast<i32>((wanted + static_cast<u32>(columns) - 1) / static_cast<u32>(columns));
+    const bool use_atlas = painted && cell_width <= max_texture_size_ / columns && cell_height <= max_texture_size_ / rows;
+    GLint saved_draw = 0, saved_read = 0, saved_viewport[4]{};
+    GLfloat saved_clear[4]{};
+    std::vector<FigureInstance> baked;
+    if (use_atlas) {
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &saved_draw);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &saved_read);
+        glGetIntegerv(GL_VIEWPORT, saved_viewport);
+        glGetFloatv(GL_COLOR_CLEAR_VALUE, saved_clear);
+        const i32 width = cell_width * columns, height = cell_height * rows;
+        if (width > painted_.width() || height > painted_.height()) {
+            const i32 grow_width = std::min(max_texture_size_, std::max(width, painted_.width() + painted_.width() / 2));
+            const i32 grow_height = std::min(max_texture_size_, std::max(height, painted_.height() + painted_.height() / 2));
+            painted_.create(grow_width, grow_height);
+        }
+        painted_.bind();
+        glClearColor(0, 0, 0, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        baked = instances;
+        for (u32 i = 0; i < wanted; ++i) {
+            FigureInstance& item = baked[i];
+            const f32 x = static_cast<f32>((i % static_cast<u32>(columns)) * static_cast<u32>(cell_width) + 1) * pixel;
+            const f32 y = static_cast<f32>((i / static_cast<u32>(columns)) * static_cast<u32>(cell_height) + 1) * pixel;
+            item.ox += x - item.x;
+            item.oy += y - item.y;
+            item.x = x;
+            item.y = y;
+        }
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     if (wanted > instance_capacity_) {
         instance_capacity_ = wanted + wanted / 2;
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(instance_capacity_) * static_cast<GLsizeiptr>(sizeof(FigureInstance)), nullptr, GL_STREAM_DRAW);
     }
-    glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(wanted) * static_cast<GLsizeiptr>(sizeof(FigureInstance)), instances.data());
+    glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(wanted) * static_cast<GLsizeiptr>(sizeof(FigureInstance)), use_atlas ? baked.data() : instances.data());
 
     shader_.bind();
-    const Vec2 scale = camera.clip_scale(), offset = camera.clip_offset();
+    Camera2D raster_camera = camera;
+    if (use_atlas) {
+        raster_camera.zoom = raster_zoom;
+        raster_camera.viewport = {static_cast<f32>(painted_.width()), static_cast<f32>(painted_.height())};
+        raster_camera.center = raster_camera.viewport * (0.5f * pixel);
+    }
+    const Vec2 scale = raster_camera.clip_scale(), offset = raster_camera.clip_offset();
     glUniform4f(u_view_, scale.x, scale.y, offset.x, offset.y);
-    glUniform1f(u_pixel_, pixel);
+    glUniform1f(u_pixel_, use_atlas ? pixel : 1.0f / camera.zoom);
+    glUniform1i(u_painted_, painted ? 1 : 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, parts_);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glBindVertexArray(vao_);
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, static_cast<GLsizei>(wanted));
     glBindVertexArray(0);
+    draw_calls_ = 1;
+
+    if (use_atlas) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(saved_draw));
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(saved_read));
+        glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+        glClearColor(saved_clear[0], saved_clear[1], saved_clear[2], saved_clear[3]);
+        SpriteInstance* out = sprites_.begin(wanted);
+        const auto uv = [](f32 value) { return static_cast<u16>(clamp(std::lround(value * 65535.0f), 0l, 65535l)); };
+        for (u32 i = 0; i < wanted; ++i) {
+            const FigureInstance &item = instances[i], &source = baked[i];
+            const f32 u0 = source.x * raster_zoom / static_cast<f32>(painted_.width());
+            const f32 v0 = 1.0f - source.y * raster_zoom / static_cast<f32>(painted_.height());
+            const f32 u1 = (source.x + source.w) * raster_zoom / static_cast<f32>(painted_.width());
+            const f32 v1 = 1.0f - (source.y + source.h) * raster_zoom / static_cast<f32>(painted_.height());
+            out[i] = {item.x, item.y, item.w, item.h, uv(u0), uv(v0), uv(u1), uv(v1), 0xFFFFFFFFu};
+        }
+        sprites_.draw(wanted, camera, painted_.color_texture());
+        draw_calls_ = 2;
+    }
 }
 
 }  // namespace zl

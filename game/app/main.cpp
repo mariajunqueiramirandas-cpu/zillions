@@ -42,6 +42,7 @@ struct Options {
     bool grid = false;
 
     bool character = true;                  // put the player's character on the map
+    FigureStyle character_style = FigureStyle::Painted;
     const char* character_sheet = nullptr;  // render the character's poses to this PNG and exit
     bool have_player = false;
     Vec2 player{0, 0};                      // where the character stands, in tiles
@@ -51,8 +52,8 @@ struct Options {
 };
 
 // Pixels per tile the camera starts at when it follows the character, and the
-// closest it will go. The character is drawn in code, so it stays sharp well
-// past the 128 the painted art was made for.
+// closest it will go. Painted mode retains its sprite resolution as the view
+// zooms in; smooth mode exposes the procedural drawing at full resolution.
 constexpr f32 kFollowZoom = 64.0f;
 constexpr f32 kMaxZoom = 256.0f;
 
@@ -74,6 +75,7 @@ void usage() {
         "  --overlay MODE       debug view: height or pass\n"
         "  --grid               draw tile borders\n"
         "  --no-character       the map alone, as a free-flying viewer\n"
+        "  --character-style S  painted (default) or smooth\n"
         "  --character-sheet F  render the character's poses to a PNG and exit\n"
         "  --player X Y         where the character stands (default: the start)\n"
         "  --heading DEG        screenshots: the way it faces (0 east, 90 towards the viewer)\n"
@@ -83,7 +85,8 @@ void usage() {
         "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
         "          C new look, X hood, 1 the hero's look, Tab free camera (WASD or right-drag to pan),\n"
         "          R new map, V cycle overlay (height, passability), G grid,\n"
-        "          F whole map, H back to the character, F2 screenshot, F5 reload art, Esc quit");
+        "          F whole map, H back to the character, F2 screenshot, F5 reload art,\n"
+        "          F6 painted/smooth character, Esc quit");
 }
 
 bool parse(int argc, char** argv, Options& o) {
@@ -119,6 +122,12 @@ bool parse(int argc, char** argv, Options& o) {
             }
         }
         else if (is("--no-character")) o.character = false;
+        else if (is("--character-style")) {
+            const char* style = next();
+            if (!std::strcmp(style, "painted")) o.character_style = FigureStyle::Painted;
+            else if (!std::strcmp(style, "smooth")) o.character_style = FigureStyle::Smooth;
+            else { usage(); return false; }
+        }
         else if (is("--character-sheet")) o.character_sheet = next();
         else if (is("--player")) {
             o.player.x = static_cast<f32>(std::atof(next()));
@@ -190,7 +199,8 @@ HumanLook make_look(u64 seed, bool hood_up) {
 // The map with one figure standing in it. The scenery is drawn in two halves,
 // north and south of the figure, so that it walks behind what is nearer the
 // viewer and in front of what is further away; tall scenery in front of it
-// turns translucent. Four draw calls, or two without a figure.
+// turns translucent. Up to five draw calls with a painted sprite (four in
+// smooth mode), or two without a figure.
 struct Scene {
     MapRenderer& map;
     FigureRenderer& figures;
@@ -344,8 +354,8 @@ void bench_figure(FigureRenderer& renderer, const HumanLook& look, Camera2D came
             submit_ms += submit.millis();
             glFinish();
         }
-        std::printf("  figure %3.0f px/tile  %zu parts   submit %7.3f ms   frame %7.3f ms\n",
-                    zoom, figure.parts.size(), submit_ms / kFrames, total.millis() / kFrames);
+        std::printf("  figure %3.0f px/tile  %zu parts  %u calls   submit %7.3f ms   frame %7.3f ms\n",
+                    zoom, figure.parts.size(), renderer.draw_calls(), submit_ms / kFrames, total.millis() / kFrames);
     }
 }
 
@@ -439,6 +449,7 @@ int main(int argc, char** argv) {
 
     FigureRenderer figures;
     figures.init();
+    figures.set_style(options.character_style);
     Scene scene{renderer, figures};
     if (options.character_sheet) return save_character_sheet(scene, map, options) ? 0 : 1;
 
@@ -488,8 +499,12 @@ int main(int argc, char** argv) {
         frame_whole_map(view, map);
         bench_view("whole map", renderer, view);
 
-        std::printf("procedural figure, 1 draw call per frame (pose + upload + shader)\n");
-        bench_figure(figures, player.look, camera);
+        for (FigureStyle style : {FigureStyle::Painted, FigureStyle::Smooth}) {
+            figures.set_style(style);
+            std::printf("procedural figure, %s (pose + upload + shader + composite)\n", style == FigureStyle::Painted ? "painted sprite" : "smooth");
+            bench_figure(figures, player.look, camera);
+        }
+        figures.set_style(options.character_style);
 
         std::printf("sprite batch, 1 draw call per frame\n");
         SpriteBatch horde;
@@ -551,6 +566,7 @@ int main(int argc, char** argv) {
             if (in.pressed(Key::C)) player.look = make_look(++look_seed, false);
             if (in.pressed(Key::Num1)) player.look = make_look(look_seed = 0, false);
             if (in.pressed(Key::X)) player.look.hood_up = !player.look.hood_up;
+            if (in.pressed(Key::F6)) figures.set_style(figures.style() == FigureStyle::Painted ? FigureStyle::Smooth : FigureStyle::Painted);
         }
         if (in.pressed(Key::F5)) {
             const std::string assets = find_assets(options.assets);
@@ -617,9 +633,11 @@ int main(int argc, char** argv) {
         title_timer += dt;
         if (title_timer >= 0.5) {
             char title[200];
-            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | %d draw calls%s",
+            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | %u draw calls%s%s",
                           static_cast<unsigned long long>(map.seed), map.width, map.height, frames / title_timer, frame_ms_sum / frames,
-                          renderer.sprites_drawn(), options.character ? 4 : 2, options.character && !follow ? " | free camera (Tab)" : "");
+                          renderer.sprites_drawn(), options.character ? 3u + figures.draw_calls() : 2u,
+                          options.character ? (figures.style() == FigureStyle::Painted ? " | painted sprite" : " | smooth") : "",
+                          options.character && !follow ? " | free camera (Tab)" : "");
             window.set_title(title);
             title_timer = 0.0;
             frame_ms_sum = 0.0;

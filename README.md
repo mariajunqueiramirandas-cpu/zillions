@@ -36,9 +36,12 @@ and Ctrl strolls. The camera follows until Tab releases it. Trees in front of
 the character fade, cliffs and deep water block movement, and fords slow the
 character and cover its feet with water and ripples.
 
-The figure is built and animated entirely in code, with no character image or
-model to load. A jointed skeleton drives the clothes, face, hair, hood and belt
-gear. C chooses another seeded look, X raises the hood, and 1 restores the hero.
+The figure is built and animated entirely in code, then painted into a small
+transparent texture every frame and drawn as a sprite. Soft filtering, flatter
+shading and quieter detail match the terrain. A jointed skeleton drives the
+clothes, face, hair, hood and belt gear. C chooses another seeded look, X raises
+the hood, and 1 restores the hero. F6 compares the painted sprite with the
+smooth procedural drawing; animation stays live in both styles.
 The [character notes](docs/character.md) explain the rig, gait and shader and
 record the visual and performance checks.
 
@@ -70,6 +73,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
          [--no-character] [--player X Y] [--heading DEG] [--speed M --phase P]
          [--look N] [--hood] [--time SECONDS] [--character-sheet FILE]
+         [--character-style painted|smooth]
          [--overlay height|pass] [--grid] [--bench]
 ```
 
@@ -86,6 +90,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
 | F5 | reload ground textures and sprites without changing the map or camera |
+| F6 | switch the character between painted sprite and smooth rendering |
 
 The painted art is read from `--assets DIR`, or by default from `./assets`, or
 failing that from the `assets` folder of the source tree the binary was built
@@ -105,9 +110,12 @@ in degrees (0 east, 90 south), speed in metres per second and stride phase in
 0..1; water depth is taken from the tile. `--look N` selects a repeatable person
 (0 restores the hero), and `--hood` raises the hood. `--character-sheet FILE`
 writes 64 poses and looks; `--zoom 256` makes a close-up review sheet.
+`--character-style painted` is the default; `smooth` draws the underlying
+procedural shapes directly at the screen resolution.
 
 `zillions --bench` times the map renderer off-screen, measures the procedural
-figure at 6, 64 and 256 pixels per tile (including pose construction and upload),
+figure in both styles at 6, 64 and 256 pixels per tile (including pose,
+upload, painting and composition),
 then stress-tests the sprite batch with 10,000 to 250,000 moving sprites.
 
 The overlays draw gameplay data per tile, exactly as the simulation sees it.
@@ -137,15 +145,17 @@ simulation can run in tests, tools and (later) a server.
 
 ## Engine notes
 
-- **Four draw calls with the character, two for the map alone.** The ground is
+- **Up to five draw calls with a painted character, four in smooth mode, two
+  for the map alone.** The ground is
   one full-screen shader pass: each pixel looks up its four nearest tiles in a
   data texture and blends their materials, so cost depends on screen
   resolution, not map size. Everything
   standing on the ground is one instanced draw: 28 bytes per sprite written
   straight into mapped GPU memory, quad corners derived from `gl_VertexID`.
-  With the character, scenery is split north and south of its feet and one
-  instanced figure pass sits between those slices. Empty scenery slices are
-  skipped.
+  With the character, scenery is split north and south of its feet. Painted
+  mode first renders the visible poses to a GPU atlas at up to 64 pixels per
+  tile, then composites them in one sprite batch between those slices. Smooth
+  mode uses one figure pass instead. Empty scenery slices are skipped.
 - **Job system.** A persistent thread pool with a blocking `parallel_for`;
   chunks are claimed with a single atomic add.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is

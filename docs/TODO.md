@@ -82,10 +82,20 @@ in `docs/character.md`.
 ### Docs and housekeeping
 
 - [x] README: controls/options, character section and pose sheet, actor layout
-      and the four-call scene rendering path.
+      and the scene rendering path, including live painted sprites and F6.
 - [x] `docs/design.md`: character added to the status table.
 - [x] `docs/character.md`: rig, gait, shader, images and validation evidence.
 - [x] Update the description of PR #6 with the completed feature and checks.
+
+### Live painted sprites
+
+- [x] Paint the current pose into a small transparent GPU atlas every frame,
+      with softer material shading and linear filtering to match the terrain.
+- [x] Keep animation, seeded looks, hood, water and tree layering live. F6 and
+      `--character-style painted|smooth` compare the two render styles.
+- [x] Verify premultiplied transparency, upright orientation, batching,
+      culling, atlas reuse, framebuffer/viewport restoration and the far marker
+      with the OpenGL render checks.
 
 ## Game (not started)
 

@@ -19,7 +19,7 @@ enum class Key : i32 {
     Enter = 257,
     Tab = 258,
     Right = 262, Left, Down, Up,
-    F1 = 290, F2, F3, F4, F5,
+    F1 = 290, F2, F3, F4, F5, F6,
     LeftShift = 340,
     LeftControl = 341,
     Count = 349,

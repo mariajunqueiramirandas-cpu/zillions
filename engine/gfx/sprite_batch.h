@@ -41,6 +41,8 @@ public:
     // instanced draw. Sprites are drawn in array order with premultiplied-alpha
     // blending, so write them back to front.
     void draw(u32 count, const Camera2D& camera, const Texture& atlas);
+    // A live render target can supply its premultiplied RGBA 2D texture too.
+    void draw(u32 count, const Camera2D& camera, u32 atlas_texture);
 
 private:
     Shader shader_;

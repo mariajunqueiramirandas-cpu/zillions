@@ -1,8 +1,9 @@
 # The player's character
 
 The player can walk one human around a generated map. The character has no
-image, mesh or animation asset: `game/actor/human.cpp` builds a posed collection
-of rounded cones, and `game/render/figure_renderer.cpp` paints it in one draw.
+image, mesh or animation asset to load: `game/actor/human.cpp` builds a posed
+collection of rounded cones. `game/render/figure_renderer.cpp` paints that live
+pose to a small transparent GPU texture, then draws it as a painted sprite.
 This implements exploration and movement; colony interactions and combat are
 future game features.
 
@@ -14,6 +15,11 @@ beard, hood and blink variations from the front and back. In the final two rows
 the columns are cropped, shaggy, long, tied back, shaved, bearded, hood up and
 blinking. The sheet is rendered at 128 pixels per tile; close-ups were also
 reviewed at 256.
+
+Painted mode is the default. F6 switches live to smooth procedural rendering
+for comparison, or select `--character-style painted|smooth` at startup.
+
+![Smooth drawing above, live painted sprites below](character/styles.jpg)
 
 ## Rig and gait
 
@@ -79,6 +85,22 @@ the painted terrain. Two light-ray samples provide contact shadows. Conservative
 screen bounds skip cone calculations when a part cannot reach the pixel,
 including the contact-shadow and ground-shadow passes.
 
+In painted mode, this shading runs into a live RGBA8 atlas at up to 64 pixels
+per tile, with flatter form lighting, quieter highlights and hair detail,
+softer tonal transitions and lighter contact edges. The atlas has a transparent
+background and stores premultiplied colour. Linear filtering softens the
+finished sprite as it scales, matching the painted scenery rather than adding
+a pixel-art outline. The current skeleton and clothing are repainted each
+frame, so there is no baked set of directions or animation frames.
+
+Visible figures occupy separate atlas cells with transparent padding. The
+texel grid stays anchored to each figure's feet as its bounds change. The
+atlas grows when needed and is reused, with no CPU image readback. Its pass
+restores the caller's draw/read framebuffers, viewport and clear colour before
+the sprites are composited. Below the authoring resolution, the atlas uses
+the current view's pixel scale, preserving the marker's screen size. Smooth
+mode keeps the direct procedural rendering for comparison.
+
 Ground shadows follow the terrain light. Wading lowers the figure and clips
 the visible surface at the water height, using the inverse projection instead
 of cutting at each cone's centreline. Animated rings mark displaced water. A
@@ -89,8 +111,10 @@ The scene draws ground, northern scenery, the figure, then southern scenery.
 Tall foreground sprites overlapping the figure fade towards 24% opacity over
 0.35 tiles of overlap, keeping the body readable under overlapping crowns.
 Low ground cover stays solid. The reveal bounds account
-for the wading sink offset. This takes up to four draw calls; the map alone
-takes up to two, and empty scenery slices are skipped.
+for the wading sink offset. Painted mode uses up to five draw calls: ground,
+northern scenery, live figure atlas, sprite composition and southern scenery.
+Smooth mode uses up to four, and the map alone takes up to two. Empty scenery
+slices are skipped.
 
 ![Tree occlusion, a ford and the far-zoom marker](character/in-scene.jpg)
 
@@ -103,7 +127,18 @@ parts, renderer capacity, bounds, phase wrapping, planted soles, seeded looks,
 obstacle/cliff/ramp collision, wall sliding, ford slowdown, repeatable replays,
 spawn relocation, map edges and interpolation.
 
-The live window was exercised under Xvfb with Mesa llvmpipe: jogging, sprinting,
+`zl_render_tests` additionally runs the actual OpenGL shaders and texture
+composition. It checks premultiplied transparency, upright sprites, multiple
+atlas cells, offscreen culling, reuse without stale pixels, style switching,
+draw/read framebuffer restoration, viewport offsets, clear colour and the
+13-screen-pixel marker. Run it with a display, or on Linux:
+
+```sh
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./build/tests/zl_render_tests
+```
+
+The live window was exercised under Xvfb with Mesa llvmpipe: F6 painted/smooth
+switching, animated sprite updates, jogging, sprinting,
 strolling, turning, camera follow/free/return, look changes, hood, hero reset,
 screenshots and exit. Screenshots check the heading and gait rows, all hair
 styles, beard and hood. Scene checks use seed 7, size 256, resolution 1: a
@@ -119,9 +154,17 @@ Reproduce the main captures and benchmark from the repository root:
 ./build/game/zillions --seed 7 --size 256 --resolution 1 --width 800 --height 600 --bench
 ```
 
-The isolated figure benchmark includes rig construction, upload and the
-completed GPU frame. On this cloud executor's software renderer at 800×600,
-the conservative bounds reduced the 256 px/tile figure from 80.0 to 53.7 ms
-and the 64 px/tile figure from 6.39 to 4.46 ms. The final 6 px/tile case took
-1.21 ms. These are software-renderer measurements of one figure, not a hardware
-GPU or crowd-performance claim.
+The isolated figure benchmark includes rig construction, upload, painting,
+composition and the completed GPU frame. A serial run on this cloud executor's
+Mesa llvmpipe software renderer at 800×600 measured:
+
+| View (pixels/tile) | Painted sprite (ms/frame) | Smooth (ms/frame) |
+|---|---:|---:|
+| 6 | 1.71 | 1.27 |
+| 64 | 5.15 | 4.40 |
+| 256 | 4.66 | 61.49 |
+
+The additional atlas/composition pass has a small cost at normal zoom. At
+close-up zoom the figure shader still runs at its sprite resolution, keeping
+that work bounded. These measurements cover one figure on a software renderer;
+hardware GPU and crowd performance are not measured here.
