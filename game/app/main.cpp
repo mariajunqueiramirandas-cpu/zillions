@@ -70,6 +70,7 @@ void usage() {
         "  --whole-map          frame the entire map (default: the start area)\n"
         "  --center X Y         centre the view on a tile\n"
         "  --zoom PIXELS        pixels per tile\n"
+        "  --time SECONDS       screenshot animation time\n"
         "  --overlay MODE       debug view: height or pass\n"
         "  --grid               draw tile borders\n"
         "  --no-character       the map alone, as a free-flying viewer\n"
@@ -200,7 +201,8 @@ struct Scene {
             map.draw(camera, options);
             return;
         }
-        const SeeThrough reveal{position + lo, position + hi};
+        const Vec2 sink{0.0f, std::max(figure->waterline, 0.0f) * kFigureUpScale};
+        const SeeThrough reveal{position + lo + sink, position + hi + sink};
         // From far away a ring on the ground says where the character is.
         const f32 marker = 1.0f - smoothstep(9.0f, 16.0f, camera.zoom);
         const FigureDraw item{figure, position, options.time, marker};
@@ -224,9 +226,10 @@ bool save_screenshot(Scene& scene, const Camera2D& camera, const MapDrawOptions&
 
 // The character from every side and through its strides, on the ground of the
 // start area: a row standing, turned through eight headings; walking and
-// running in profile, towards the viewer and away; and a row of other people.
+// running in profile, towards the viewer and away; seeded people; and explicit
+// front/back hair, beard, hood and blink variants.
 bool save_character_sheet(Scene& scene, const TileMap& map, const Options& options) {
-    constexpr int kColumns = 8, kRows = 6;
+    constexpr int kColumns = 8, kRows = 8;
     constexpr f32 kCellWidth = 1.5f, kCellHeight = 1.9f;
     const f32 zoom = options.zoom > 0.0f ? options.zoom : 96.0f;
 
@@ -251,9 +254,18 @@ bool save_character_sheet(Scene& scene, const TileMap& map, const Options& optio
                 case 2: motion.heading = kPi * 0.36f; motion.speed = kWalkSpeed; motion.phase = step; break;  // walking towards the viewer
                 case 3: motion.heading = 0.0f; motion.speed = kJogSpeed; motion.phase = step; break;    // running east
                 case 4: motion.heading = -kPi * 0.68f; motion.speed = kSprintSpeed; motion.phase = step; break;  // sprinting away
-                default:
+                case 5:
                     look = random_look(static_cast<u64>(column) + 1 + options.look_seed * 8);
                     motion.heading = kPi * (0.5f - 0.16f * static_cast<f32>(column % 3 - 1));
+                    break;
+                default:
+                    // Guaranteed coverage of all five styles, a beard, a
+                    // raised hood and a blink, from the front and the back.
+                    look.hair_style = static_cast<HairStyle>(column % static_cast<int>(HairStyle::Count));
+                    look.beard = column == 5;
+                    look.hood_up = column == 6;
+                    motion.heading = row == 6 ? kPi * 0.5f : -kPi * 0.5f;
+                    motion.time = column == 7 ? (0.2f + hash_to_unit(hash32(97u)) * 0.6f) * 3.4f : 0.9f;
                     break;
             }
             Figure& figure = figures[static_cast<size_t>(row * kColumns + column)];
@@ -298,6 +310,43 @@ void bench_view(const char* name, MapRenderer& renderer, const Camera2D& camera)
         glFinish();
     }
     std::printf("  %-10s %6u sprites   submit %7.3f ms   frame %7.3f ms\n", name, renderer.sprites_drawn(), submit_ms / kFrames, total.millis() / kFrames);
+}
+
+// Isolate the procedural figure, including pose construction and data upload.
+// A close-up covers many more fragments than a character at gameplay zoom.
+void bench_figure(FigureRenderer& renderer, const HumanLook& look, Camera2D camera) {
+    RenderTarget target;
+    target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
+    target.bind();
+    camera.center = {0.0f, -0.5f};
+    constexpr int kFrames = 30;
+    for (f32 zoom : {6.0f, kFollowZoom, kMaxZoom}) {
+        camera.zoom = zoom;
+        Figure figure;
+        f64 submit_ms = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            build_human(look, HumanMotion{}, figure);
+            const FigureDraw item{&figure, {0, 0}, 0, zoom < 9.0f ? 1.0f : 0.0f};
+            renderer.draw(&item, 1, camera);
+        }
+        glFinish();
+        const Stopwatch total;
+        for (int i = 0; i < kFrames; ++i) {
+            glClear(GL_COLOR_BUFFER_BIT);
+            const Stopwatch submit;
+            HumanMotion motion;
+            motion.speed = kJogSpeed;
+            motion.phase = static_cast<f32>(i) / kFrames;
+            motion.time = static_cast<f32>(i) / 60.0f;
+            build_human(look, motion, figure);
+            const FigureDraw item{&figure, {0, 0}, motion.time, zoom < 9.0f ? 1.0f : 0.0f};
+            renderer.draw(&item, 1, camera);
+            submit_ms += submit.millis();
+            glFinish();
+        }
+        std::printf("  figure %3.0f px/tile  %zu parts   submit %7.3f ms   frame %7.3f ms\n",
+                    zoom, figure.parts.size(), submit_ms / kFrames, total.millis() / kFrames);
+    }
 }
 
 // Stress test for the unit path that does not exist yet: `count` sprites that
@@ -401,6 +450,7 @@ int main(int argc, char** argv) {
         if (posed) {
             HumanMotion pose = options.pose;
             pose.time = options.time;
+            pose.wade = player.motion().wade;
             player.set_motion(pose);
         }
     };
@@ -437,6 +487,9 @@ int main(int argc, char** argv) {
         bench_view("zoomed out", renderer, view);
         frame_whole_map(view, map);
         bench_view("whole map", renderer, view);
+
+        std::printf("procedural figure, 1 draw call per frame (pose + upload + shader)\n");
+        bench_figure(figures, player.look, camera);
 
         std::printf("sprite batch, 1 draw call per frame\n");
         SpriteBatch horde;

@@ -54,6 +54,7 @@ bool Player::spawn(const TileMap& map, Vec2 where) {
     const i32 cy = clamp(static_cast<i32>(std::floor(where.y)), 0, std::max(map.height - 1, 0));
     if (can_stand(map, where, kRadius)) {
         position_ = previous_position_ = where;
+        motion_.wade = previous_motion_.wade = map.terrain[static_cast<size_t>(map.index(cx, cy))] == Terrain::Shallows ? kWadeDepth : 0.0f;
         return true;
     }
     // Otherwise the nearest tile with room, searching outwards in rings.
@@ -75,6 +76,8 @@ bool Player::spawn(const TileMap& map, Vec2 where) {
         }
         if (best < 1.0e30f) {
             position_ = previous_position_ = found;
+            const i32 tile = map.index(static_cast<i32>(found.x), static_cast<i32>(found.y));
+            motion_.wade = previous_motion_.wade = map.terrain[static_cast<size_t>(tile)] == Terrain::Shallows ? kWadeDepth : 0.0f;
             return true;
         }
     }
@@ -83,6 +86,7 @@ bool Player::spawn(const TileMap& map, Vec2 where) {
 }
 
 void Player::step(const TileMap& map, const PlayerInput& input, f32 dt) {
+    if (!(dt > 0.0f) || !std::isfinite(dt)) return;
     previous_position_ = position_;
     previous_motion_ = motion_;
 

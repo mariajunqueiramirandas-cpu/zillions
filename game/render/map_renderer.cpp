@@ -20,8 +20,8 @@ constexpr f32 kDecorMinZoom = 2.5f;
 // Scenery taller than this many tiles turns translucent in front of a
 // SeeThrough box; it fades in over kSeeThroughFade tiles of overlap.
 constexpr f32 kSeeThroughMinHeight = 1.1f;
-constexpr f32 kSeeThroughFade = 0.45f;
-constexpr f32 kSeeThroughAlpha = 0.38f;
+constexpr f32 kSeeThroughFade = 0.35f;
+constexpr f32 kSeeThroughAlpha = 0.24f;
 
 // The terrain shader hard-codes the texture-array layer that holds noise.
 static_assert(kNoiseLayer == 8, "update NOISE in the terrain shader");

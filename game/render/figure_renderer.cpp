@@ -23,7 +23,7 @@ static_assert(static_cast<int>(FigureMaterial::Cloth) == 0 && static_cast<int>(F
               static_cast<int>(FigureMaterial::Leather) == 2 && static_cast<int>(FigureMaterial::Hair) == 3 &&
               static_cast<int>(FigureMaterial::Metal) == 4 && static_cast<int>(FigureMaterial::Count) <= 8,
               "update the material constants in the figure shader");
-static_assert(FigurePartFlag::FlatCaps == 1, "update the flag test in the figure shader");
+static_assert(FigurePartFlag::FlatCaps == 1 && FigurePartFlag::Unshadowed == 2, "update the flag tests in the figure shader");
 
 // A point at height h throws its shadow this far across the ground, in tiles
 // per tile of height. The direction is the terrain shader's light; the length
@@ -66,7 +66,7 @@ const char* kFragment = R"(#version 330 core
 uniform sampler2D uParts;
 uniform float uPixel;     // tiles per screen pixel
 uniform vec2 uShadow;     // screen offset of a shadow per tile of height
-uniform float uSquash;    // how much the ground under a figure is foreshortened
+uniform vec2 uProjection; // depth and up scales, shared with the CPU projection
 uniform vec3 uGround;     // ripple radius, marker radius, marker radius in pixels
 in vec2 vLocal;
 flat in vec4 vInfo;
@@ -90,6 +90,19 @@ float noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
     return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// Conservative screen-space bounds avoid the cone's square roots for parts
+// that cannot touch this pixel. Keep the same guard for antialiasing/shadows.
+bool nearPart(vec2 p, vec2 a, vec2 b, float ra, float rb, float guard) {
+    vec2 halfSize = abs(b - a) * 0.5 + vec2(max(ra, rb) + guard);
+    return all(lessThanEqual(abs(p - (a + b) * 0.5), halfSize));
+}
+
+// Height at the visible surface, not just at the cone's centreline. The
+// inverse of the figure projection keeps the water cut level across a boot.
+float surfaceHeight(vec4 height, float t, vec2 off, float bulge) {
+    return mix(height.x, height.y, t) - off.y * uProjection.y + bulge * uProjection.x;
 }
 
 // Signed distance from p to a rounded cone. A rounded cone is the union of
@@ -123,15 +136,18 @@ float occlusion(vec2 p, float z, int count, float water) {
     for (int i = 0; i < count; ++i) {
         vec4 ends = texelFetch(uParts, ivec2(i * 4, vRow), 0);
         vec4 size = texelFetch(uParts, ivec2(i * 4 + 1, vRow), 0);
+        bool near1 = nearPart(p1, ends.xy, ends.zw, size.x, size.y, 0.0);
+        bool near2 = nearPart(p2, ends.xy, ends.zw, size.x, size.y, 0.0);
+        if (!near1 && !near2) continue;
         vec4 more = texelFetch(uParts, ivec2(i * 4 + 2, vRow), 0);
-        bool flatCaps = more.w >= 7.5;
+        bool flatCaps = (int(more.w + 0.5) & 8) != 0;
         float t, r;
         vec2 off;
-        if (cone(p1, ends.xy, ends.zw, size.x, size.y, flatCaps, t, off, r) < 0.0 && mix(more.x, more.y, t) >= water) {
+        if (near1 && cone(p1, ends.xy, ends.zw, size.x, size.y, flatCaps, t, off, r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
             float middle = mix(size.z, size.w, t), bulge = sqrt(max(r * r - dot(off, off), 0.0));
             dark = max(dark, smoothstep(0.004, 0.020, middle + bulge - z1) * step(middle - bulge, z1 + 0.12));
         }
-        if (cone(p2, ends.xy, ends.zw, size.x, size.y, flatCaps, t, off, r) < 0.0 && mix(more.x, more.y, t) >= water) {
+        if (near2 && cone(p2, ends.xy, ends.zw, size.x, size.y, flatCaps, t, off, r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
             float middle = mix(size.z, size.w, t), bulge = sqrt(max(r * r - dot(off, off), 0.0));
             dark = max(dark, smoothstep(0.004, 0.020, middle + bulge - z2) * step(middle - bulge, z2 + 0.12));
         }
@@ -175,7 +191,7 @@ vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, ou
         grain = 0.62;
     }
     light += dab * grain;
-    if (shadowed) {
+    if (shadowed && (code & 16) == 0) {
         float z = mix(size.z, size.w, t) + sqrt(max(r * r - dot(off, off), 0.0));
         light = mix(light, min(light, -0.25), occlusion(p, z, count, water));
     }
@@ -206,7 +222,7 @@ vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, ou
     c = mix(c, high, gloss * smoothstep(0.84 - W, 0.84 + W, light));
 
     vec2 outward = off / max(length(off), 1.0e-6);
-    rim = smoothstep(0.10, -0.35, dot(outward, normalize(LIGHT.xy)));
+    rim = 1.0 - smoothstep(-0.35, 0.10, dot(outward, normalize(LIGHT.xy)));
     return c;
 }
 
@@ -228,23 +244,29 @@ void main() {
         vec4 more = texelFetch(uParts, ivec2(i * 4 + 2, vRow), 0);
         float t, r;
         vec2 off;
-        float d = cone(p, ends.xy, ends.zw, size.x, size.y, more.w >= 7.5, t, off, r);
-        if (d < 0.5 * aa && mix(more.x, more.y, t) >= water) {
-            inside = min(inside, d);
-            float z = mix(size.z, size.w, t) + sqrt(max(r * r - dot(off, off), 0.0));
-            if (z > zFirst) {
-                second = first;
-                zSecond = zFirst;
-                first = i;
-                zFirst = z;
-            } else if (z > zSecond) {
-                second = i;
-                zSecond = z;
+        if (nearPart(p, ends.xy, ends.zw, size.x, size.y, 0.5 * aa)) {
+            float d = cone(p, ends.xy, ends.zw, size.x, size.y, (int(more.w + 0.5) & 8) != 0, t, off, r);
+            float bulge = sqrt(max(r * r - dot(off, off), 0.0));
+            if (water > 0.0) d = max(d, water - surfaceHeight(more, t, off, bulge));
+            if (d < 0.5 * aa) {
+                inside = min(inside, d);
+                float z = mix(size.z, size.w, t) + bulge;
+                if (z > zFirst) {
+                    second = first;
+                    zSecond = zFirst;
+                    first = i;
+                    zFirst = z;
+                } else if (z > zSecond) {
+                    second = i;
+                    zSecond = z;
+                }
             }
         }
         if (max(more.x, more.y) > water) {
             float ha = max(more.x - water, 0.0), hb = max(more.y - water, 0.0);
-            float d2 = cone(p, ends.xy + ha * uShadow, ends.zw + hb * uShadow, size.x * 0.85, size.y * 0.85, false, t, off, r);
+            vec2 a = ends.xy + ha * uShadow, b = ends.zw + hb * uShadow;
+            if (!nearPart(p, a, b, size.x * 0.85, size.y * 0.85, 0.012 + 0.075 * max(ha, hb))) continue;
+            float d2 = cone(p, a, b, size.x * 0.85, size.y * 0.85, false, t, off, r);
             // The further the shadow falls, the softer its edge.
             float soft = 0.012 + 0.075 * mix(ha, hb, t);
             shadow = max(shadow, 1.0 - smoothstep(-soft, soft, d2));
@@ -253,7 +275,7 @@ void main() {
 
     // --- the ground under the figure: its shadow, ripples if it is wading,
     // and a ring to find it by when the camera is far away
-    vec2 ground = vec2(p.x, p.y / uSquash);
+    vec2 ground = vec2(p.x, p.y / uProjection.x);
     float reach = length(ground);
     vec3 under = SOOT;
     float underAlpha = shadow * 0.44;
@@ -322,7 +344,7 @@ void FigureRenderer::init() {
     shader_.bind();
     glUniform1i(shader_.uniform("uParts"), 0);
     glUniform2f(shader_.uniform("uShadow"), kShadowOnScreen.x, kShadowOnScreen.y);
-    glUniform1f(shader_.uniform("uSquash"), kFigureDepthScale);
+    glUniform2f(shader_.uniform("uProjection"), kFigureDepthScale, kFigureUpScale);
     glUniform3f(shader_.uniform("uGround"), kRippleRadius, kMarkerRadius, kMarkerPixels);
     u_view_ = shader_.uniform("uView");
     u_pixel_ = shader_.uniform("uPixel");
@@ -384,7 +406,7 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
             const f32 texel[16] = {
                 a.x, a.y, b.x, b.y,
                 part.ra, part.rb, figure_depth(part.a), figure_depth(part.b),
-                part.a.z, part.b.z, part.roundness, static_cast<f32>(static_cast<int>(part.material) + 8 * (part.flags & FigurePartFlag::FlatCaps)),
+                part.a.z, part.b.z, part.roundness, static_cast<f32>(static_cast<int>(part.material) + 8 * part.flags),
                 static_cast<f32>(part.color.r) / 255.0f, static_cast<f32>(part.color.g) / 255.0f, static_cast<f32>(part.color.b) / 255.0f, static_cast<f32>(part.group),
             };
             std::copy_n(texel, 16, out + static_cast<size_t>(i) * 16);

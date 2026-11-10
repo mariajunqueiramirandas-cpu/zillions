@@ -29,6 +29,7 @@ enum class FigureMaterial : u8 {
 namespace FigurePartFlag {
 enum : u8 {
     FlatCaps = 1 << 0,  // cut square at both ends instead of rounded: bands, hems, cuffs
+    Unshadowed = 1 << 1, // tiny facial features keep their own shading without contact shadows
 };
 }
 

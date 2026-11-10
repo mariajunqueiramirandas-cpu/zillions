@@ -9,8 +9,8 @@ pour in from the map edges. The terrain is the defence: cliffs, rivers and
 mountains funnel the horde through ramps, fords and passes, and the game is
 about choosing which chokepoints to hold. See [the design notes](docs/design.md).
 
-So far only the engine and the map generator exist; the colony, the economy and
-the horde are still to build.
+The engine, map generator and a playable human character are built. The colony,
+economy and horde are still to build.
 
 ![A generated map](docs/screenshots/map-seed-7.jpg)
 
@@ -28,6 +28,21 @@ Files live in `assets/ground` and `assets/sprites`, and the
 tiled ground proofs. The screenshots on this page are taken with that art.
 
 ![Generated ground textures](docs/art/ground-swatches.png)
+
+## The player's character
+
+Walk a human character around the map with WASD or the arrows; Shift sprints
+and Ctrl strolls. The camera follows until Tab releases it. Trees in front of
+the character fade, cliffs and deep water block movement, and fords slow the
+character and cover its feet with water and ripples.
+
+The figure is built and animated entirely in code, with no character image or
+model to load. A jointed skeleton drives the clothes, face, hair, hood and belt
+gear. C chooses another seeded look, X raises the hood, and 1 restores the hero.
+The [character notes](docs/character.md) explain the rig, gait and shader and
+record the visual and performance checks.
+
+![Character poses, gaits and looks](docs/character/poses.png)
 
 ## Building
 
@@ -53,15 +68,20 @@ which need no windowing system or GPU.
 zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no-vsync]
          [--assets DIR]
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
+         [--no-character] [--player X Y] [--heading DEG] [--speed M --phase P]
+         [--look N] [--hood] [--time SECONDS] [--character-sheet FILE]
          [--overlay height|pass] [--grid] [--bench]
 ```
 
 | Input | Action |
 |---|---|
-| WASD / arrows, right-drag | pan (Shift: faster) |
-| mouse wheel | zoom about the cursor |
+| WASD / arrows | move the character (Shift: sprint, Ctrl: stroll); pan in free camera |
+| Tab | switch between camera follow and free camera |
+| right- or middle-drag | pan in free camera |
+| mouse wheel | zoom about the character while following, or the cursor in free camera |
+| C / X / 1 | new seeded look / toggle hood / restore the hero |
 | R or Space | generate the next seed |
-| F / H | frame the whole map / the start area |
+| F / H | frame the whole map / return to the character (start area with `--no-character`) |
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
@@ -79,8 +99,16 @@ one group is incomplete; the log reports that group's fallback.
 `zl_mapgen` is the headless generator: `--out preview.png` writes a flat-colour
 preview, `--bench` times generation.
 
-`zillions --bench` times the renderer off-screen, then stress-tests the sprite
-batch with 10,000 to 250,000 sprites that all move every frame.
+`--no-character` opens the map viewer with a free camera. `--player X Y`
+places the character on nearby walkable ground. Screenshot poses use heading
+in degrees (0 east, 90 south), speed in metres per second and stride phase in
+0..1; water depth is taken from the tile. `--look N` selects a repeatable person
+(0 restores the hero), and `--hood` raises the hood. `--character-sheet FILE`
+writes 64 poses and looks; `--zoom 256` makes a close-up review sheet.
+
+`zillions --bench` times the map renderer off-screen, measures the procedural
+figure at 6, 64 and 256 pixels per tile (including pose construction and upload),
+then stress-tests the sprite batch with 10,000 to 250,000 moving sprites.
 
 The overlays draw gameplay data per tile, exactly as the simulation sees it.
 Height shows level 0 in blue, 1 in yellow, 2 in red, ramps in white and a black
@@ -96,23 +124,28 @@ engine/math      vectors, simplex / fBm / ridged noise
 engine/platform  window, OpenGL context, input (GLFW)
 engine/gfx       shaders, textures, render targets, 2D camera, sprite batch
 game/world       tile map, map generator, CPU preview        (headless)
-game/render      terrain shader, relief/erosion, art loading and placeholders
+game/actor       human rig, gait, looks and player controller (headless)
+game/render      terrain and figure shaders, relief, art loading and placeholders
 game/app         the viewer executable
 tools/           zl_mapgen
 tests/           headless test suite
 assets/          painted ground textures and sprites, and their source sheets
 ```
 
-`zl_core` and `zl_world` have no dependency on a window or GPU, so the
+`zl_core`, `zl_world` and `zl_actor` have no dependency on a window or GPU, so the
 simulation can run in tests, tools and (later) a server.
 
 ## Engine notes
 
-- **Two draw calls per frame.** The ground is one full-screen shader pass: each
-  pixel looks up its four nearest tiles in a data texture and blends their
-  materials, so cost depends on screen resolution, not map size. Everything
+- **Four draw calls with the character, two for the map alone.** The ground is
+  one full-screen shader pass: each pixel looks up its four nearest tiles in a
+  data texture and blends their materials, so cost depends on screen
+  resolution, not map size. Everything
   standing on the ground is one instanced draw: 28 bytes per sprite written
   straight into mapped GPU memory, quad corners derived from `gl_VertexID`.
+  With the character, scenery is split north and south of its feet and one
+  instanced figure pass sits between those slices. Empty scenery slices are
+  skipped.
 - **Job system.** A persistent thread pool with a blocking `parallel_for`;
   chunks are claimed with a single atomic add.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is

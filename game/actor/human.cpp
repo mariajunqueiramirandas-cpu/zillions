@@ -20,8 +20,8 @@ constexpr f32 kHipWidth = 0.092f;     // from the spine out to each hip joint
 constexpr f32 kShoulderWidth = 0.185f;
 constexpr f32 kAnkleHeight = 0.075f;
 constexpr f32 kHeelBack = 0.05f;      // sole: heel behind the ankle,
-constexpr f32 kBallAhead = 0.13f;     // ball of the foot ahead of it,
-constexpr f32 kToeLength = 0.06f;     // and the toes beyond that
+constexpr f32 kBallAhead = 0.105f;    // ball of the foot ahead of it,
+constexpr f32 kToeLength = 0.045f;    // and the toes beyond that
 constexpr f32 kHeadRadius = 0.098f;
 
 // --- frames ---------------------------------------------------------------------
@@ -236,7 +236,7 @@ Rig pose(const HumanLook& look, const HumanMotion& m) {
         const Vec3 standing{sign * 0.105f * bw, -sign * 0.018f, kAnkleHeight};
         const Vec3 walking{sign * lerp(0.085f, 0.055f, run) * bw, step.forward, step.height};
         Vec3 ankle = lerp(standing, walking, w);
-        const f32 turnout = sign * lerp(rad(13.0f), rad(6.0f), w);
+        const f32 turnout = sign * lerp(rad(7.0f), rad(4.0f), w);
 
         Frame flat = yaw(base, turnout);
         Frame F = pitch(flat, -step.pitch * w);
@@ -377,7 +377,7 @@ public:
         part.color = color;
         part.material = material;
         part.group = group;
-        part.flags = flags;
+        part.flags = static_cast<u8>(flags | (group == kFace ? FigurePartFlag::Unshadowed : 0));
         part.roundness = roundness;
         figure_.parts.push_back(part);
     }
@@ -388,8 +388,8 @@ public:
 
     // A band around the cone a..b: the stretch from t0 to t1, `extra` proud of
     // the surface and cut square.
-    void band(Vec3 a, Vec3 b, f32 ra, f32 rb, f32 t0, f32 t1, f32 extra, Color color, FigureMaterial material, u8 group) {
-        cone(lerp(a, b, t0), lerp(a, b, t1), lerp(ra, rb, t0) + extra, lerp(ra, rb, t1) + extra, color, material, group, FigurePartFlag::FlatCaps);
+    void band(Vec3 a, Vec3 b, f32 ra, f32 rb, f32 t0, f32 t1, f32 extra, Color color, FigureMaterial material, u8 group, f32 roundness = 1.0f) {
+        cone(lerp(a, b, t0), lerp(a, b, t1), lerp(ra, rb, t0) + extra, lerp(ra, rb, t1) + extra, color, material, group, FigurePartFlag::FlatCaps, roundness);
     }
 
     f32 scale() const { return scale_; }
@@ -462,22 +462,33 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
             const f32 sign = i == 0 ? -1.0f : 1.0f;
             const Vec3 thigh = normalize(s.knee[i] - s.hip[i]);
             edge[i] = s.hip[i] + normalize(lerp(thigh, Vec3{0, 0, -1}, 0.35f)) * 0.335f + P.r * (sign * 0.012f) + sway * 0.25f;
+        }
+        // A continuous horizontal hem, even when one thigh lifts a panel.
+        const f32 hem_z = (edge[0].z + edge[1].z) * 0.5f;
+        for (int i = 0; i < 2; ++i) {
+            const f32 sign = i == 0 ? -1.0f : 1.0f;
+            edge[i].z = hem_z;
             const Vec3 top = P.at(sign * 0.068f * bw, 0.0f, 0.02f);
             paint.cone(top, edge[i], 0.110f * bw, 0.110f * bw, look.tunic, Mat::Cloth, kTunic, FigurePartFlag::FlatCaps, 0.92f);
-            paint.band(top, edge[i], 0.110f * bw, 0.110f * bw, 0.88f, 1.0f, 0.004f, hem, Mat::Cloth, kTrim);
+            paint.cone(edge[i] + Vec3{0, 0, 0.035f}, edge[i], 0.114f * bw, 0.114f * bw, hem, Mat::Cloth, kTrim, FigurePartFlag::FlatCaps, 0.75f);
         }
         const Vec3 top = P.at(0.0f, 0.0f, 0.0f), bottom = lerp(edge[0], edge[1], 0.5f);
         paint.cone(top, bottom, 0.106f * bw, 0.104f * bw, look.tunic, Mat::Cloth, kTunic, FigurePartFlag::FlatCaps, 0.92f);
-        paint.band(top, bottom, 0.106f * bw, 0.104f * bw, 0.88f, 1.0f, 0.004f, hem, Mat::Cloth, kTrim);
+        paint.cone(bottom + Vec3{0, 0, 0.035f}, bottom, 0.108f * bw, 0.108f * bw, hem, Mat::Cloth, kTrim, FigurePartFlag::FlatCaps, 0.75f);
     }
 
     // --- hooded cape over the shoulders
+    const auto mantle = [&](Vec3 a, Vec3 b, f32 ra, f32 rb) {
+        paint.cone(a, b, ra, rb, look.hood, Mat::Cloth, kMantle, FigurePartFlag::FlatCaps, 0.48f);
+        paint.band(a, b, ra, rb, 0.88f, 1.0f, 0.002f, toned(look.hood, 0.68f), Mat::Cloth, kMantle, 0.48f);
+        trunk[trunk_count++] = {a, b, ra, rb};
+    };
     for (int i = 0; i < 2; ++i) {
         const f32 sign = i == 0 ? -1.0f : 1.0f;
-        body(C.at(sign * 0.035f, 0.0f, 0.243f), C.at(sign * 0.205f * bw, 0.0f, 0.168f), 0.086f, 0.080f * bw, look.hood, kMantle, 0.95f);
+        mantle(C.at(sign * 0.090f, 0.0f, 0.235f), C.at(sign * 0.125f * bw, 0.0f, 0.125f), 0.100f, 0.125f * bw);
     }
-    body(C.at(0.0f, 0.052f, 0.215f), C.at(0.0f, 0.070f * bw, 0.095f), 0.098f, 0.074f, look.hood, kMantle, 0.95f);
-    body(C.at(0.0f, -0.052f, 0.215f), C.at(0.0f, -0.078f * bw, 0.075f), 0.102f, 0.080f, look.hood, kMantle, 0.95f);
+    mantle(C.at(0.0f, 0.052f, 0.215f), C.at(0.0f, 0.070f * bw, 0.095f), 0.090f, 0.074f);
+    mantle(C.at(0.0f, -0.052f, 0.215f), C.at(0.0f, -0.078f * bw, 0.075f), 0.095f, 0.080f);
 
     // --- arms
     for (int i = 0; i < 2; ++i) {
@@ -508,23 +519,23 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
     // degrees to the figure's right and degrees up.
     const Vec3 middle = H.at(0.0f, 0.0f, -0.012f);
     const auto face = [&](f32 right, f32 up, f32 lift) {
-        const f32 y = rad(right), p = rad(up);
+        const f32 y = rad(right), p = rad(up + 9.0f);
         const Vec3 dir = H.f * (std::cos(p) * std::cos(y)) + H.r * (std::cos(p) * std::sin(y)) + H.u * std::sin(p);
         return surface_point(head, 2, middle, dir, lift);
     };
 
     const Color ear = toned(look.skin, 0.93f);
-    const Color eye = hex(0x241A14), lid = toned(look.skin, 0.62f);
+    const Color eye = hex(0x66574A), lid = toned(look.skin, 0.72f);
     const Color lips = blend(toned(look.skin, 0.62f), hex(0x8E2C28), 0.35f);
     for (int i = 0; i < 2; ++i) {
         const f32 sign = i == 0 ? -1.0f : 1.0f;
         paint.cone(H.at(sign * 0.097f, -0.008f, 0.004f), H.at(sign * 0.099f, -0.012f, -0.022f), 0.019f, 0.015f, ear, Mat::Skin, kHead);
-        if (rig.blink) paint.cone(face(sign * 14.0f, 9.0f, 0.003f), face(sign * 28.0f, 9.0f, 0.003f), 0.005f, 0.005f, lid, Mat::Skin, kFace);
-        else paint.cone(face(sign * 17.0f, 9.0f, 0.001f), face(sign * 25.0f, 9.0f, 0.001f), 0.0115f, 0.0105f, eye, Mat::Leather, kFace);
-        paint.cone(face(sign * 8.0f, 24.0f, 0.004f), face(sign * 33.0f, 21.0f, 0.004f), 0.0068f, 0.0050f, toned(look.hair, 0.80f), Mat::Hair, kFace);
+        if (rig.blink) paint.cone(face(sign * 17.0f, 9.0f, 0.003f), face(sign * 27.0f, 9.0f, 0.003f), 0.003f, 0.003f, lid, Mat::Skin, kFace);
+        else paint.cone(face(sign * 19.0f, 9.0f, 0.002f), face(sign * 25.0f, 9.0f, 0.002f), 0.0060f, 0.0055f, eye, Mat::Skin, kFace);
+        paint.cone(face(sign * 13.0f, 24.0f, 0.004f), face(sign * 30.0f, 21.0f, 0.004f), 0.0040f, 0.0030f, toned(look.hair, 0.90f), Mat::Hair, kFace);
     }
     paint.cone(face(0.0f, 12.0f, 0.003f), face(0.0f, -9.0f, 0.016f), 0.011f, 0.016f, look.skin, Mat::Skin, kHead);
-    paint.cone(face(-11.0f, -29.0f, 0.002f), face(11.0f, -29.0f, 0.002f), 0.0058f, 0.0058f, lips, Mat::Skin, kFace);
+    paint.cone(face(-9.0f, -29.0f, 0.002f), face(9.0f, -29.0f, 0.002f), 0.0038f, 0.0038f, lips, Mat::Skin, kFace);
 
     if (look.beard) {
         const f32 across[5] = {-64.0f, -33.0f, 0.0f, 33.0f, 64.0f}, down[5] = {-16.0f, -40.0f, -52.0f, -40.0f, -16.0f};
@@ -542,7 +553,7 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
     const Color hair = look.hair;
     const bool shaved = look.hair_style == HairStyle::Shaved;
     if (!look.hood_up) {
-        if (shaved) paint.ball(H.at(0.0f, -0.020f, 0.026f), 0.1005f, blend(look.skin, hair, 0.55f), Mat::Hair, kHair);
+        if (shaved) paint.ball(H.at(0.0f, -0.020f, 0.026f), 0.1005f, blend(look.skin, hair, 0.55f), Mat::Skin, kHair);
         else paint.ball(H.at(0.0f, -0.024f, 0.030f), 0.107f, hair, Mat::Hair, kHair);
     }
     if (!shaved) {
