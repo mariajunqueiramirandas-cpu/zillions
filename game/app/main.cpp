@@ -57,11 +57,12 @@ struct Options {
     bool hood_up = false;
 };
 
-// Pixels per tile the camera starts at when it follows the character, and the
-// closest it will go. Painted mode retains its sprite resolution as the view
-// zooms in; smooth mode exposes the procedural drawing at full resolution.
+// Pixels per tile the camera starts at when it follows the character, the
+// tactical city-builder overview in management mode, and the closest it will go.
 constexpr f32 kFollowZoom = 64.0f;
+constexpr f32 kManagementZoom = 34.0f;
 constexpr f32 kMaxZoom = 256.0f;
+constexpr f32 kEdgePanMargin = 36.0f;
 
 void usage() {
     std::puts(
@@ -92,9 +93,10 @@ void usage() {
         "  --look N             a different person for every N (default: the hero)\n"
         "  --hood               hood up\n"
         "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
-        "          C new look, X hood, 1 the hero's look, Tab free camera (WASD or right-drag to pan),\n"
+        "          Space management mode (border/WASD/right-drag pan, autonomous character),\n"
+        "          C new look, X hood, 1 the hero's look,\n"
         "          R new map, V cycle overlay (height, passability), G grid,\n"
-        "          F whole map, H back to the character, F2 screenshot, F5 reload art,\n"
+        "          F whole map, H centre on character, F2 screenshot, F5 reload art,\n"
         "          F6 painted/smooth character, Esc quit");
 }
 
@@ -226,7 +228,7 @@ struct Scene {
     MapRenderer& map;
     FigureRenderer& figures;
 
-    void draw(const Camera2D& camera, const MapDrawOptions& options, const Figure* figure, Vec2 position) {
+    void draw(const Camera2D& camera, const MapDrawOptions& options, const Figure* figure, Vec2 position, f32 extra_marker = 0.0f) {
         Vec2 lo, hi;
         if (!figure || !figure_screen_bounds(*figure, lo, hi)) {
             map.draw(camera, options);
@@ -234,8 +236,9 @@ struct Scene {
         }
         const Vec2 sink{0.0f, std::max(figure->waterline, 0.0f) * kFigureUpScale};
         const SeeThrough reveal{position + lo + sink, position + hi + sink};
-        // From far away a ring on the ground says where the character is.
-        const f32 marker = 1.0f - smoothstep(9.0f, 16.0f, camera.zoom);
+        // From far away a ring on the ground says where the character is; a mode
+        // switch also pulses the ring so the eye tracks the handover.
+        const f32 marker = saturate(std::max(1.0f - smoothstep(9.0f, 16.0f, camera.zoom), extra_marker));
         const FigureDraw item{figure, position, options.time, marker};
         map.draw_ground(camera, options);
         map.draw_scenery(camera, -1.0e30f, position.y);
@@ -649,10 +652,17 @@ int main(int argc, char** argv) {
     FixedStep sim(60.0);
     f64 last = now_seconds(), title_timer = 0.0, frame_ms_sum = 0.0;
     int frames = 0, shot_index = 0;
-    // The camera follows the character until the player takes it away with Tab.
-    bool follow = options.character;
+    // The camera follows the character until the player switches to management
+    // mode with Space.
+    bool follow = options.character && !options.whole_map && !options.have_center;
+    f32 saved_follow_zoom = options.zoom > 0.0f ? options.zoom : kFollowZoom;
+    f32 saved_management_zoom = kManagementZoom;
+    CameraModeSwitch mode_switch;
+    PlayerAutonomy autonomy;
+    u64 autonomy_switches = 0;
+    autonomy.reset(player.position(), map.seed);
     u64 look_seed = options.look_seed;
-    if (follow && !options.whole_map && !options.have_center) {
+    if (follow) {
         camera.center = player_focus(1.0f);
         if (options.zoom <= 0.0f) camera.zoom = kFollowZoom;
     }
@@ -667,32 +677,52 @@ int main(int argc, char** argv) {
         const IVec2 fb = window.framebuffer_size();
         if (fb.x <= 0 || fb.y <= 0) continue;  // minimised
         camera.viewport = {static_cast<f32>(fb.x), static_cast<f32>(fb.y)};
+        const f32 min_zoom = fit_zoom(map, camera.viewport) * 0.7f;
+        const f32 max_zoom = options.character ? kMaxZoom : 128.0f;
 
         if (in.pressed(Key::Escape)) window.request_close();
-        if (in.pressed(Key::R) || in.pressed(Key::Space)) {
+        if (in.pressed(Key::R)) {
             options.map.seed += 1;
             map = generate_map(options.map, jobs);
             renderer.set_map(map, jobs);
             log_map(map);
             place_player(false);
+            autonomy.reset(player.position(), map.seed);
+            mode_switch.cancel();
             if (follow) camera.center = player_focus(1.0f);
         }
         if (in.pressed(Key::G)) draw.grid = !draw.grid;
         if (in.pressed(Key::V)) draw.overlay = static_cast<MapOverlay>((static_cast<int>(draw.overlay) + 1) % static_cast<int>(MapOverlay::Count));
-        if (in.pressed(Key::F)) {
+        if (in.pressed(Key::F) && !follow) {
             frame_whole_map(camera, map);
-            follow = false;
+            mode_switch.cancel();
         }
         if (in.pressed(Key::H)) {
+            mode_switch.cancel();
             if (options.character) {
-                follow = true;
-                camera.zoom = kFollowZoom;
+                camera.center = player_focus(static_cast<f32>(sim.alpha()));
+                if (follow) saved_follow_zoom = camera.zoom = kFollowZoom;
             } else {
                 frame_start(camera, map);
             }
         }
         if (options.character) {
-            if (in.pressed(Key::Tab)) follow = !follow;
+            if (in.pressed(Key::Space)) {
+                follow = !follow;
+                const Vec2 focus = player_focus(static_cast<f32>(sim.alpha()));
+                if (!follow) {
+                    saved_follow_zoom = clamp(camera.zoom, min_zoom, kMaxZoom);
+                    const f32 target_zoom = clamp(saved_management_zoom, min_zoom, kMaxZoom);
+                    const f32 heading = player.motion().heading;
+                    const Vec2 look_dir{std::cos(heading), std::sin(heading)};
+                    mode_switch.begin_to_management(camera, focus, look_dir, target_zoom);
+                    autonomy.reset(player.position(), map.seed ^ (++autonomy_switches * 0x9E3779B97F4A7C15ull));
+                } else {
+                    if (camera.zoom > min_zoom * 1.2f) saved_management_zoom = clamp(camera.zoom, min_zoom, kMaxZoom);
+                    const f32 target_zoom = clamp(saved_follow_zoom, min_zoom, kMaxZoom);
+                    mode_switch.begin_to_character(camera, target_zoom);
+                }
+            }
             if (in.pressed(Key::C)) player.look = make_look(++look_seed, false);
             if (in.pressed(Key::Num1)) player.look = make_look(look_seed = 0, false);
             if (in.pressed(Key::X)) player.look.hood_up = !player.look.hood_up;
@@ -707,40 +737,62 @@ int main(int argc, char** argv) {
                    art.painted_sprites ? "painted" : "placeholder", timer.millis());
         }
 
-        // The direction keys steer the character while the camera follows
-        // it, and pan the camera at a constant on-screen speed when it is free.
+        // The direction keys steer the character while the camera follows it.
+        // In management mode (or without a character) the camera behaves like a
+        // city builder: cursor near the window borders, WASD/arrows or
+        // right/middle-drag all pan across the map.
         Vec2 keys{0, 0};
         if (in.down(Key::A) || in.down(Key::Left)) keys.x -= 1.0f;
         if (in.down(Key::D) || in.down(Key::Right)) keys.x += 1.0f;
         if (in.down(Key::W) || in.down(Key::Up)) keys.y -= 1.0f;
         if (in.down(Key::S) || in.down(Key::Down)) keys.y += 1.0f;
         PlayerInput input;
+        Vec2 pan_delta{0, 0};
         if (follow) {
             input.move = keys;
             input.sprint = in.down(Key::LeftShift);
             input.walk = in.down(Key::LeftControl);
         } else {
+            const bool dragging = in.down(MouseButton::Right) || in.down(MouseButton::Middle);
+            const Vec2 border = dragging ? Vec2{0, 0} : edge_pan(in.mouse, camera.viewport, in.mouse_inside, kEdgePanMargin);
+            Vec2 pan = keys + border;
+            const f32 pan_len = length(pan);
+            if (pan_len > 1.0f) pan = pan / pan_len;
             const f32 speed = (in.down(Key::LeftShift) ? 2400.0f : 1000.0f) / camera.zoom;
-            camera.center += keys * (speed * static_cast<f32>(dt));
-            // Dragging grabs the map.
-            if (in.down(MouseButton::Right) || in.down(MouseButton::Middle)) camera.center -= in.mouse_delta / camera.zoom;
+            pan_delta = pan * (speed * static_cast<f32>(dt));
+            if (dragging) pan_delta -= in.mouse_delta / camera.zoom;
+            camera.center += pan_delta;
         }
 
-        // The simulation ticks at a fixed rate; so far the character is all there is to move.
+        // The simulation ticks at a fixed rate; in management mode the
+        // character wanders the local area autonomously.
         const int steps = sim.advance(dt);
         if (options.character) {
-            for (int k = 0; k < steps; ++k) player.step(map, input, static_cast<f32>(sim.step_seconds()));
+            const f32 step_dt = static_cast<f32>(sim.step_seconds());
+            for (int k = 0; k < steps; ++k) {
+                const PlayerInput step_input = follow ? input : autonomy.step(map, player, step_dt);
+                player.step(map, step_input, step_dt);
+            }
         }
         const f32 alpha = static_cast<f32>(sim.alpha());
         draw.time = static_cast<f32>(now);
 
-        // The wheel zooms about the cursor, or about the character while following.
-        const f32 min_zoom = fit_zoom(map, camera.viewport) * 0.7f;
-        if (follow) {
-            if (in.scroll != 0.0f) camera.zoom = clamp(camera.zoom * std::pow(1.15f, in.scroll), min_zoom, kMaxZoom);
-            camera.center += (player_focus(alpha) - camera.center) * (1.0f - std::exp(-static_cast<f32>(dt) * 9.0f));
-        } else if (in.scroll != 0.0f) {
-            camera.zoom_at(in.mouse, std::pow(1.15f, in.scroll), min_zoom, options.character ? kMaxZoom : 128.0f);
+        // The wheel zooms about the cursor in management mode, or about the
+        // character while following.
+        const Vec2 focus = player_focus(alpha);
+        if (in.scroll != 0.0f) {
+            mode_switch.cancel_zoom();
+            if (follow) {
+                camera.zoom = clamp(camera.zoom * std::pow(1.15f, in.scroll), min_zoom, kMaxZoom);
+                saved_follow_zoom = camera.zoom;
+            } else {
+                camera.zoom_at(in.mouse, std::pow(1.15f, in.scroll), min_zoom, max_zoom);
+                saved_management_zoom = camera.zoom;
+            }
+        }
+        const f32 switch_pulse = mode_switch.step(camera, focus, pan_delta, static_cast<f32>(dt), min_zoom, max_zoom);
+        if (follow && !mode_switch.active) {
+            camera.center += (focus - camera.center) * (1.0f - std::exp(-static_cast<f32>(dt) * 9.0f));
         }
         camera.center.x = clamp(camera.center.x, 0.0f, static_cast<f32>(map.width));
         camera.center.y = clamp(camera.center.y, 0.0f, static_cast<f32>(map.height));
@@ -749,7 +801,8 @@ int main(int argc, char** argv) {
         RenderTarget::bind_default(fb.x, fb.y);
         const Figure* posed = pose_figure(alpha);
         const Vec2 standing = player.position_at(alpha);
-        scene.draw(camera, draw, posed, standing);
+        const f32 management_ring = !follow ? (1.0f - smoothstep(26.0f, 44.0f, camera.zoom)) * 0.32f : 0.0f;
+        scene.draw(camera, draw, posed, standing, std::max(switch_pulse, management_ring));
         frame_ms_sum += frame_timer.millis();
         ++frames;
 
@@ -767,7 +820,7 @@ int main(int argc, char** argv) {
                           static_cast<unsigned long long>(map.seed), map.width, map.height, frames / title_timer, frame_ms_sum / frames,
                           renderer.sprites_drawn(), options.character ? 3u + figures.draw_calls() : 2u,
                           options.character ? (figures.style() == FigureStyle::Painted ? " | painted sprite" : " | smooth") : "",
-                          options.character && !follow ? " | free camera (Tab)" : "");
+                          options.character && !follow ? " | management mode (Space)" : "");
             window.set_title(title);
             title_timer = 0.0;
             frame_ms_sum = 0.0;

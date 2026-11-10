@@ -97,9 +97,13 @@ void Window::poll() {
     const Vec2 mouse{static_cast<f32>(mx) * static_cast<f32>(fb.x) / static_cast<f32>(ww > 0 ? ww : 1),
                      static_cast<f32>(my) * static_cast<f32>(fb.y) / static_cast<f32>(wh > 0 ? wh : 1)};
     input_.mouse_delta = have_mouse_ ? mouse - last_mouse_ : Vec2{0, 0};
+    if (have_mouse_ && (input_.mouse_delta.x != 0.0f || input_.mouse_delta.y != 0.0f)) mouse_moved_ = true;
     input_.mouse = mouse;
     last_mouse_ = mouse;
     have_mouse_ = true;
+    const bool hovered = glfwGetWindowAttrib(window_, GLFW_HOVERED) == GLFW_TRUE;
+    const bool focused = glfwGetWindowAttrib(window_, GLFW_FOCUSED) == GLFW_TRUE;
+    input_.mouse_inside = mouse_moved_ && hovered && focused && mx >= 0.0 && my >= 0.0 && mx <= static_cast<double>(ww) && my <= static_cast<double>(wh);
     input_.scroll = pending_scroll_;
 }
 

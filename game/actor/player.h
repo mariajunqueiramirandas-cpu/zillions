@@ -5,6 +5,7 @@
 
 #include "actor/human.h"
 #include "core/base.h"
+#include "core/rng.h"
 #include "math/vec.h"
 #include "world/tilemap.h"
 
@@ -61,6 +62,38 @@ private:
     Vec2 velocity_{0.0f, 0.0f};
     Vec2 drive_{0.0f, 0.0f};  // the velocity being steered towards, smoothed
     HumanMotion motion_, previous_motion_;
+};
+
+// Basic local autonomy when the player switches to management mode: patrols
+// around an anchor with varied gaits, curved multi-point paths, obstacle
+// feelers and idle glances. Headless and deterministic.
+class PlayerAutonomy {
+public:
+    static constexpr f32 kWanderRadius = 7.5f;
+
+    void reset(Vec2 anchor, u64 seed = 1);
+    PlayerInput step(const TileMap& map, const Player& player, f32 dt);
+
+    Vec2 anchor() const { return anchor_; }
+    Vec2 target() const { return target_; }
+    bool moving() const { return moving_; }
+
+private:
+    bool pick_waypoint(const TileMap& map, const Player& player, bool continuation);
+
+    Rng rng_{1};
+    Vec2 anchor_{0.0f, 0.0f};
+    Vec2 target_{0.0f, 0.0f};
+    Vec2 glance_dir_{0.0f, 0.0f};
+    f32 timer_ = 0.0f;        // time left in idle, or time spent on current leg
+    f32 leg_limit_ = 5.0f;    // max duration for the current walk leg
+    f32 glance_time_ = -1.0f; // when > 0 during idle, briefly turn towards glance_dir_
+    f32 curve_ = 0.0f;        // subtle angular offset for curved paths
+    f32 blocked_time_ = 0.0f; // time spent trying to move without covering ground
+    u8 pace_ = 0;             // 0: stroll, 1: jog, 2: brief sprint then jog
+    u8 chain_left_ = 0;       // waypoints left in a multi-point excursion
+    bool moving_ = false;
+    bool initialized_ = false;
 };
 
 }  // namespace zl

@@ -31,6 +31,7 @@ struct Input {
     Vec2 mouse{0, 0};        // cursor in framebuffer pixels, origin top-left
     Vec2 mouse_delta{0, 0};  // movement since the previous frame
     f32 scroll = 0.0f;       // wheel movement this frame
+    bool mouse_inside = false;  // cursor is inside the focused/hovered window
     bool key_down[static_cast<int>(Key::Count)] = {};
     bool key_pressed[static_cast<int>(Key::Count)] = {};  // went down this frame
     bool button_down[static_cast<int>(MouseButton::Count)] = {};
@@ -71,6 +72,7 @@ private:
     Input input_;
     Vec2 last_mouse_{0, 0};
     bool have_mouse_ = false;
+    bool mouse_moved_ = false;
     f32 pending_scroll_ = 0.0f;
 };
 

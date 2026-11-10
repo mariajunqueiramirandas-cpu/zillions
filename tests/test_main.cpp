@@ -139,6 +139,50 @@ TEST(camera_round_trips_and_zooms_about_a_point) {
     CHECK(std::fabs(before.x - after.x) < 1.0e-2f && std::fabs(before.y - after.y) < 1.0e-2f);
 }
 
+TEST(camera_edge_pan_and_mode_switch_animate_cleanly) {
+    const Vec2 vp{1600.0f, 900.0f};
+    CHECK(length(edge_pan({800.0f, 450.0f}, vp, true, 36.0f)) == 0.0f);
+    CHECK(length(edge_pan({2.0f, 2.0f}, vp, false, 36.0f)) == 0.0f);
+    CHECK(length(edge_pan({-5.0f, 450.0f}, vp, true, 36.0f)) == 0.0f);
+
+    const Vec2 left_mid = edge_pan({18.0f, 450.0f}, vp, true, 36.0f);
+    const Vec2 left_edge = edge_pan({0.0f, 450.0f}, vp, true, 36.0f);
+    CHECK(left_mid.x < -0.4f && left_mid.x > -0.6f && left_mid.y == 0.0f);
+    CHECK(std::fabs(left_edge.x + 1.0f) < 1.0e-5f && left_edge.y == 0.0f);
+
+    const Vec2 corner = edge_pan({1600.0f, 900.0f}, vp, true, 36.0f);
+    CHECK(corner.x > 0.7f && corner.y > 0.7f && std::fabs(length(corner) - 1.0f) < 1.0e-5f);
+
+    Camera2D camera;
+    camera.center = {50.0f, 50.0f};
+    camera.zoom = 64.0f;
+    camera.viewport = vp;
+    CameraModeSwitch sw;
+    sw.begin_to_management(camera, {50.0f, 50.0f}, {1.0f, 0.0f}, 34.0f);
+    CHECK(sw.active);
+    f32 max_pulse = 0.0f;
+    for (int i = 0; i < 40 && sw.active; ++i) {
+        max_pulse = std::max(max_pulse, sw.step(camera, {50.0f, 50.0f}, {0.1f, 0.0f}, 1.0f / 60.0f, 1.0f, 256.0f));
+    }
+    CHECK(!sw.active);
+    CHECK(max_pulse > 0.7f);
+    CHECK(std::fabs(camera.zoom - 34.0f) < 1.0e-3f);
+    CHECK(camera.center.x > 52.0f);  // forward lead + manual pan accumulated
+
+    // Swooping back from afar dips slightly in zoom mid-flight and locks onto the character.
+    camera.center = {100.0f, 80.0f};
+    camera.zoom = 34.0f;
+    sw.begin_to_character(camera, 64.0f);
+    Vec2 live_focus{40.0f, 40.0f};
+    for (int i = 0; i < 40 && sw.active; ++i) {
+        live_focus.x += 0.05f;
+        sw.step(camera, live_focus, {0.0f, 0.0f}, 1.0f / 60.0f, 1.0f, 256.0f);
+    }
+    CHECK(!sw.active);
+    CHECK(length(camera.center - live_focus) < 1.0e-3f);
+    CHECK(std::fabs(camera.zoom - 64.0f) < 1.0e-3f);
+}
+
 // --- character ---------------------------------------------------------------
 
 bool near(Vec3 a, Vec3 b, f32 epsilon = 2.0e-5f) { return length(a - b) < epsilon; }
@@ -485,6 +529,53 @@ TEST(player_edges_corners_and_interpolation_remain_safe) {
     CHECK(wrapped);
     map.flags.assign(map.flags.size(), 0);
     CHECK(!p.spawn(map));
+}
+
+TEST(player_autonomy_wanders_dynamically_and_deterministically) {
+    TileMap map = actor_map();
+    // Place a couple of rocks/trees near the start so obstacle feelers and
+    // interest scoring are exercised.
+    map.terrain[static_cast<size_t>(map.index(14, 16))] = Terrain::Forest;
+    map.flags[static_cast<size_t>(map.index(14, 16))] = 0;
+    map.terrain[static_cast<size_t>(map.index(18, 15))] = Terrain::Rocks;
+    map.flags[static_cast<size_t>(map.index(18, 15))] = 0;
+
+    Player a, b;
+    CHECK(a.spawn(map, {16.5f, 16.5f}));
+    CHECK(b.spawn(map, {16.5f, 16.5f}));
+    PlayerAutonomy ai_a, ai_b;
+    ai_a.reset(a.position(), 77);
+    ai_b.reset(b.position(), 77);
+
+    constexpr f32 dt = 1.0f / 60.0f;
+    bool stayed_valid = true, stayed_near = true;
+    int moving_ticks = 0, idle_ticks = 0, walk_ticks = 0, fast_ticks = 0;
+    f32 total_distance = 0.0f;
+    for (int i = 0; i < 1200; ++i) {
+        const Vec2 prev = a.position();
+        const PlayerInput in_a = ai_a.step(map, a, dt);
+        const PlayerInput in_b = ai_b.step(map, b, dt);
+        a.step(map, in_a, dt);
+        b.step(map, in_b, dt);
+
+        CHECK(a.position().x == b.position().x && a.position().y == b.position().y);
+        CHECK(a.motion().heading == b.motion().heading && a.motion().phase == b.motion().phase);
+        stayed_valid = stayed_valid && can_stand(map, a.position(), Player::kRadius);
+        stayed_near = stayed_near && length(a.position() - ai_a.anchor()) <= PlayerAutonomy::kWanderRadius + 1.0f;
+        total_distance += length(a.position() - prev);
+        if (ai_a.moving()) {
+            ++moving_ticks;
+            if (in_a.walk) ++walk_ticks;
+            else ++fast_ticks;
+        } else {
+            ++idle_ticks;
+        }
+    }
+    CHECK(stayed_valid);
+    CHECK(stayed_near);
+    CHECK(total_distance > 8.0f);
+    CHECK(moving_ticks > 200 && idle_ticks > 60);
+    CHECK(walk_ticks > 30 && fast_ticks > 20);  // mixes strolls with faster legs
 }
 
 // --- map generation -----------------------------------------------------------
