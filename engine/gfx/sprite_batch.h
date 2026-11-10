@@ -1,10 +1,12 @@
-// Instanced sprite renderer. Every sprite is one 28-byte instance; the quad
+// Instanced sprite renderer. Every sprite is one 44-byte instance; the quad
 // corners are derived from gl_VertexID, so there is no vertex buffer at all.
 // A whole batch, whatever its size, is a single draw call.
 #pragma once
 
 #include "core/base.h"
 #include "gfx/camera2d.h"
+#include "gfx/isometric_camera.h"
+#include "gfx/shadows.h"
 #include "gfx/shader.h"
 #include "gfx/texture.h"
 
@@ -16,8 +18,12 @@ struct SpriteInstance {
     u16 u0, v0;       // atlas rectangle, normalised to 0..65535
     u16 u1, v1;
     u32 color;        // RGBA8 tint (byte order R, G, B, A), multiplied with the texel
+    f32 depth = 0.0f;         // clip-space depth at the ground anchor
+    f32 depth_span = 0.0f;    // vertical object's depth slope, per sprite height
+    f32 anchor = 0.0f;        // normalised vertical ground anchor
+    f32 ground_span = 0.0f;   // ground-plane depth slope for the painted shadow
 };
-static_assert(sizeof(SpriteInstance) == 28, "SpriteInstance layout is part of the vertex format");
+static_assert(sizeof(SpriteInstance) == 44, "SpriteInstance layout is part of the vertex format");
 
 constexpr u32 pack_color(u8 r, u8 g, u8 b, u8 a = 255) {
     return static_cast<u32>(r) | (static_cast<u32>(g) << 8) | (static_cast<u32>(b) << 16) | (static_cast<u32>(a) << 24);
@@ -33,14 +39,15 @@ public:
     void init();
 
     // Returns write-only GPU memory with room for `capacity` instances. Fill it
-    // front to back, then call draw() with the number actually written. The
+    // back to front, then call draw() with the number actually written. The
     // pointer is invalid after draw().
     SpriteInstance* begin(u32 capacity);
 
     // Uploads nothing (the data is already in GPU memory) and issues one
     // instanced draw. Sprites are drawn in array order with premultiplied-alpha
     // blending, so write them back to front.
-    void draw(u32 count, const Camera2D& camera, const Texture& atlas);
+    void draw(u32 count, const Camera2D& camera, const Texture& atlas,
+              const ShadowView* shadows = nullptr, const IsometricCamera* world_camera = nullptr, f32 depth_scale = 1.0f);
 
 private:
     Shader shader_;

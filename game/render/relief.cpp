@@ -415,6 +415,7 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
             }
         }
     });
+    relief.heights = std::move(height);
     return relief;
 }
 

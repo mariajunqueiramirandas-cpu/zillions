@@ -26,6 +26,8 @@ public:
     // 2D RGBA8 texture. Limit the generated mip chain for padded atlases;
     // -1 keeps the full chain.
     void create(const Image& image, TextureFilter filter, TextureWrap wrap, i32 max_mip_level = -1);
+    // Single-channel, full precision height/data texture, linearly filtered.
+    void create_float(i32 width, i32 height, const f32* values);
     // 2D array texture; all layers must have the same size.
     void create_array(const std::vector<Image>& layers, TextureFilter filter, TextureWrap wrap);
 

@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
+#include <cstddef>
+#include <numeric>
+#include <string>
 
 #include "core/rng.h"
 #include "gfx/gl.h"
@@ -16,40 +18,93 @@ namespace {
 // Below this many pixels per tile, scenery sprites are smaller than a couple
 // of pixels and the ground shader alone carries the picture.
 constexpr f32 kDecorMinZoom = 2.5f;
+constexpr f32 kChunkSize = 16.0f;
+constexpr i32 kShadowResolution = 2048;
+
+struct ShadowCaster {
+    f32 x, y, z;
+    f32 left, top, width, height;
+    u16 u0, v0, u1, v1;
+    f32 anchor;
+};
 
 // The terrain shader hard-codes the texture-array layer that holds noise.
 static_assert(kNoiseLayer == 8, "update NOISE in the terrain shader");
 
 const char* kTerrainVertex = R"(#version 330 core
+layout(location = 0) in vec2 aChunk;
+uniform sampler2D uHeights;
+uniform vec2 uMapSize;
+uniform vec4 uView;
+uniform mat2 uRotation;
+uniform float uDepthScale;
+uniform float uUnit;
+uniform float uStep;
+uniform int uCells;
+uniform int uWall;
+uniform bool uShadowPass;
+uniform vec4 uShadowBounds;
+uniform vec2 uShadowLight;
+uniform float uShadowHeight;
+out vec2 vWorld;
+out float vWall;
+out float vHeight;
 void main() {
-    // One oversized triangle covers the screen; no vertex buffer needed.
-    gl_Position = vec4(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0, 0.0, 1.0);
+    const int corners[6] = int[6](0, 1, 2, 2, 1, 3);
+    int corner = corners[gl_VertexID % 6];
+    vec2 p;
+    float z;
+    vWall = 0.0;
+    if (uWall == 0) {
+        int cell = gl_VertexID / 6;
+        p = min(aChunk + (vec2(cell % uCells, cell / uCells) + vec2(corner & 1, corner >> 1)) * uStep, uMapSize);
+        z = texture(uHeights, p / uMapSize).r;
+    } else {
+        // Continuous rock skirt closes the silhouette at the four map edges.
+        int segment = gl_VertexID / 6;
+        int xs = int(ceil(uMapSize.x / uStep)), ys = int(ceil(uMapSize.y / uStep));
+        int edge = segment < xs ? 0 : (segment < xs + ys ? 1 : (segment < 2 * xs + ys ? 2 : 3));
+        int start = edge == 0 ? 0 : (edge == 1 ? xs : (edge == 2 ? xs + ys : 2 * xs + ys));
+        float t = min(float(segment - start + (corner & 1)) * uStep, edge % 2 == 0 ? uMapSize.x : uMapSize.y);
+        p = edge == 0 ? vec2(t, 0.0) : (edge == 1 ? vec2(uMapSize.x, t) : (edge == 2 ? vec2(t, uMapSize.y) : vec2(0.0, t)));
+        z = (corner >> 1) == 0 ? texture(uHeights, p / uMapSize).r : -1.5 * uUnit;
+        vWall = 1.0;
+    }
+    vec2 r = uRotation * p;
+    vec2 plane = vec2((r.x - r.y) * 0.7071067812, (r.x + r.y) * 0.3535533906 - z * 0.8660254038);
+    float depth = -((r.x + r.y) * 0.6123724357 + z * 0.5) * uDepthScale;
+    gl_Position = vec4(plane * uView.xy + uView.zw, depth, 1.0);
+    if (uShadowPass) {
+        vec2 lightPlane = (p - uShadowLight * z - uShadowBounds.xy) / uShadowBounds.zw;
+        gl_Position = vec4(lightPlane * 2.0 - 1.0, 1.0 - 2.0 * z / uShadowHeight, 1.0);
+    }
+    vWorld = p;
+    vHeight = z;
 }
 )";
 
-// The whole ground is drawn by this one shader, whatever the map size: each
-// pixel finds its four nearest tiles in a data texture and blends their
-// materials, so cost depends only on screen resolution.
-const char* kTerrainFragment = R"(#version 330 core
+// Materials remain in simulation coordinates on the displaced surface, so
+// ground, water, overlays and the tile grid rotate together without swimming.
+const char* kTerrainFragment = R"(
 uniform sampler2D uTiles;         // r: terrain id, g: resource id, b: tile flags, a: height level (point sampled)
 uniform sampler2D uRelief;        // rg: surface normal, b: height, a: cavity (ridge > 0.5 > valley)
 uniform sampler2D uSurface;       // r: mountain altitude, g: cliff face, b: height level
 uniform sampler2D uDepth;         // r: distance from water to shore, g: moisture
 uniform sampler2DArray uGround;   // one tiling texture per terrain, then noise
 uniform vec2 uMapSize;
-uniform vec4 uWorld;              // world = gl_FragCoord.xy * xy + zw
+uniform mat2 uRotation;
 uniform float uTime;
 uniform float uGrid;
 uniform int uOverlay;             // 0: none, 1: height levels, 2: passability
 uniform float uPixel;             // world units per screen pixel
-uniform float uHeightRange;       // world units of height that relief.b == 1 stands for
 uniform float uUnit;              // tiles per world unit
 out vec4 oColor;
+in vec2 vWorld;
+in float vWall;
+in float vHeight;
 
 const float WATER = 0.0, SHALLOWS = 1.0, GRASS = 3.0, FOREST = 5.0, MOUNTAIN = 6.0, NOISE = 8.0;
 const float GROUND_SCALE = 1.0 / 8.0;
-const vec3 LIGHT = vec3(-0.5013, -0.6216, 0.6016);
-const vec3 BACKDROP = vec3(0.030, 0.036, 0.046);
 // Colours the shader supplies itself, chosen to sit with the painted art
 // (see "Colours the shader owns" in docs/art-direction.md).
 const vec3 WATER_SHORE = vec3(0.37, 0.46, 0.41);
@@ -72,7 +127,8 @@ vec3 groundColor(float id, vec2 uv, float moisture) {
 }
 
 void main() {
-    vec2 p = gl_FragCoord.xy * uWorld.xy + uWorld.zw;
+    vec3 LIGHT = normalize(vec3(uShadowLight, 1.0));
+    vec2 p = vWorld;
     vec2 mapUV = p / uMapSize;
     vec2 uv = p * GROUND_SCALE;
 
@@ -131,19 +187,12 @@ void main() {
     vec3 n = vec3(relief.rg * 2.0 - 1.0, 0.0);
     n.z = sqrt(max(0.0, 1.0 - dot(n.xy, n.xy)));
     float light = dot(n, LIGHT) / LIGHT.z;  // 1 on level ground
-    // High ground towards the light throws a shadow: three steps of a ray march.
-    // This is what makes a plateau read as raised: its far side drops into shade.
-    vec2 sunward = normalize(LIGHT.xy) * uUnit / uMapSize;  // one world unit towards the light
-    float rise1 = (texture(uRelief, mapUV + sunward * 0.6).b - relief.b) * uHeightRange;
-    float rise2 = (texture(uRelief, mapUV + sunward * 1.5).b - relief.b) * uHeightRange;
-    float rise3 = (texture(uRelief, mapUV + sunward * 2.8).b - relief.b) * uHeightRange;
-    float shadow = max(max(smoothstep(0.25, 0.80, rise1), smoothstep(0.60, 1.40, rise2)), smoothstep(1.20, 2.30, rise3));
     // Ridges catch the light and valleys hold shade, beyond what the slope alone gives.
     float cavity = clamp((relief.a - 0.5) * 2.0, -1.0, 1.0);
     float cliff = surface.g;
     float shade = clamp(1.0 + (light - 1.0) * mix(0.42, 0.90, max(rock, cliff)), 0.69, 1.27);
     // On open ground the same term brightens the rim of a plateau and darkens the foot of its cliff.
-    shade *= (1.0 - 0.38 * shadow) * (1.0 + cavity * mix(0.20, 0.28, rock));
+    shade *= 1.0 + cavity * mix(0.20, 0.28, rock);
     shade *= 0.90 + 0.22 * broad.b;  // large-scale tonal variation hides texture repeats
     // Painterly light on rock: warm where lit, cool in shade.
     vec3 rockLight = mix(vec3(0.84, 0.90, 1.02), vec3(1.05, 1.00, 0.92), smoothstep(0.70, 1.20, light));
@@ -176,13 +225,25 @@ void main() {
     float foam = shore * (0.55 + 0.45 * sin(uTime * 1.3 + noise.a * 12.0 + p.x * 0.7));
     color = mix(color, FOAM, foam * 0.35);
 
+    // Direct sun is occluded; cool ambient sky light remains in the shadows.
+    // Apply to water too, so banks and trees cast across the shoreline.
+    float visibility = shadowVisibility(p, vHeight);
+    if (uShadows) {
+        // A face turned away from the sun has no direct illumination. Handle
+        // grazing faces analytically rather than letting shadow-map precision
+        // leave contour-shaped bands across a steep mountain flank.
+        visibility *= smoothstep(-0.20, 0.20, dot(n, LIGHT));
+    }
+    color *= mix(vec3(0.52, 0.58, 0.66), vec3(1.0), visibility);
+
     // An overcast, smoke-stained light over everything: a little colour
     // drained from the ground and a thin warm-grey haze laid on top.
     color = mix(vec3(dot(color, vec3(0.299, 0.587, 0.114))), color, 0.86);
     color = mix(color, HAZE, 0.06);
 
     vec2 fromEdge = abs(fract(p) - 0.5);
-    float line = smoothstep(0.5 - 1.5 * uPixel, 0.5, max(fromEdge.x, fromEdge.y));
+    vec2 lineWidth = min(vec2(0.45), fwidth(p) * 1.1);
+    float line = max(smoothstep(0.5 - lineWidth.x, 0.5, fromEdge.x), smoothstep(0.5 - lineWidth.y, 0.5, fromEdge.y));
     color *= 1.0 - 0.22 * line * uGrid;
 
     // Debug overlays show the gameplay data exactly as the simulation sees it:
@@ -217,10 +278,52 @@ void main() {
         }
     }
 
-    // Fade to the backdrop just outside the map.
-    vec2 outside = max(-p, p - uMapSize);
-    float inside = 1.0 - smoothstep(0.0, 2.0 * uPixel, max(outside.x, outside.y));
-    oColor = vec4(mix(BACKDROP, color, inside), 1.0);
+    if (vWall > 0.5) {
+        float strata = 0.78 + 0.09 * sin(vHeight * 12.0 / uUnit + noise.r * 3.0);
+        color = texture(uGround, vec3(vec2((p.x + p.y) / 4.0, vHeight / (4.0 * uUnit)), MOUNTAIN)).rgb;
+        color *= vec3(0.63, 0.56, 0.46) * strata;
+    }
+    oColor = vec4(color, 1.0);
+}
+)";
+
+const char* kDepthFragment = R"(#version 330 core
+void main() {}
+)";
+
+const char* kCasterVertex = R"(#version 330 core
+layout(location = 0) in vec3 aGround;
+layout(location = 1) in vec4 aRect;
+layout(location = 2) in vec4 aUV;
+layout(location = 3) in float aAnchor;
+uniform vec2 uRight;
+uniform vec4 uShadowBounds;
+uniform vec2 uShadowLight;
+uniform float uShadowHeight;
+out vec2 vUV;
+out float vY;
+flat out float vAnchor;
+void main() {
+    vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    vec2 offset = aRect.xy + aRect.zw * corner;
+    vec2 p = aGround.xy + uRight * offset.x;
+    float z = aGround.z - offset.y / 0.866025404;
+    vec2 lightPlane = (p - uShadowLight * z - uShadowBounds.xy) / uShadowBounds.zw;
+    gl_Position = vec4(lightPlane * 2.0 - 1.0, 1.0 - 2.0 * z / uShadowHeight, 1.0);
+    vUV = mix(aUV.xy, aUV.zw, corner);
+    vY = corner.y;
+    vAnchor = aAnchor;
+}
+)";
+
+const char* kCasterFragment = R"(#version 330 core
+uniform sampler2D uAtlas;
+in vec2 vUV;
+in float vY;
+flat in float vAnchor;
+void main() {
+    // Painted ground shadows and transparent canvas never become casters.
+    if (vY > vAnchor || texture(uAtlas, vUV).a < 0.45) discard;
 }
 )";
 
@@ -233,32 +336,88 @@ u32 tint(f32 brightness, f32 warmth) {
 
 MapRenderer::~MapRenderer() {
     if (vao_) glDeleteVertexArrays(1, &vao_);
+    if (chunk_buffer_) glDeleteBuffers(1, &chunk_buffer_);
+    if (shadow_fbo_) glDeleteFramebuffers(1, &shadow_fbo_);
+    if (shadow_texture_) glDeleteTextures(1, &shadow_texture_);
+    if (caster_vao_) glDeleteVertexArrays(1, &caster_vao_);
+    if (caster_buffer_) glDeleteBuffers(1, &caster_buffer_);
 }
 
 void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     reload_art(jobs, asset_dir);
 
-    terrain_.compile("terrain", kTerrainVertex, kTerrainFragment);
+    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kTerrainFragment;
+    terrain_.compile("terrain", kTerrainVertex, fragment.c_str());
+    terrain_depth_.compile("terrain shadow depth", kTerrainVertex, kDepthFragment);
+    scenery_depth_.compile("scenery shadow depth", kCasterVertex, kCasterFragment);
     terrain_.bind();
     glUniform1i(terrain_.uniform("uTiles"), 0);
     glUniform1i(terrain_.uniform("uRelief"), 1);
     glUniform1i(terrain_.uniform("uDepth"), 2);
     glUniform1i(terrain_.uniform("uGround"), 3);
     glUniform1i(terrain_.uniform("uSurface"), 4);
-    u_world_ = terrain_.uniform("uWorld");
+    glUniform1i(terrain_.uniform("uHeights"), 5);
+    u_view_ = terrain_.uniform("uView");
+    u_rotation_ = terrain_.uniform("uRotation");
+    u_depth_scale_ = terrain_.uniform("uDepthScale");
+    u_step_ = terrain_.uniform("uStep");
+    u_cells_ = terrain_.uniform("uCells");
+    u_wall_ = terrain_.uniform("uWall");
     u_map_size_ = terrain_.uniform("uMapSize");
     u_time_ = terrain_.uniform("uTime");
     u_grid_ = terrain_.uniform("uGrid");
     u_overlay_ = terrain_.uniform("uOverlay");
     u_pixel_ = terrain_.uniform("uPixel");
-    u_height_range_ = terrain_.uniform("uHeightRange");
     u_unit_ = terrain_.uniform("uUnit");
 
     glGenVertexArrays(1, &vao_);
+    glGenBuffers(1, &chunk_buffer_);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, chunk_buffer_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vec2), nullptr);
+    glVertexAttribDivisor(0, 1);
+    glBindVertexArray(0);
+
+    glGenFramebuffers(1, &shadow_fbo_);
+    glGenTextures(1, &shadow_texture_);
+    glBindTexture(GL_TEXTURE_2D, shadow_texture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, kShadowResolution, kShadowResolution, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    const f32 border[] = {1, 1, 1, 1};
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadow_texture_, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    ZL_CHECK(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "shadow framebuffer is incomplete");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    shadow_view_.texture = shadow_texture_;
+
+    glGenVertexArrays(1, &caster_vao_);
+    glGenBuffers(1, &caster_buffer_);
+    glBindVertexArray(caster_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, caster_buffer_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ShadowCaster), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(ShadowCaster), reinterpret_cast<void*>(offsetof(ShadowCaster, left)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_UNSIGNED_SHORT, GL_TRUE, sizeof(ShadowCaster), reinterpret_cast<void*>(offsetof(ShadowCaster, u0)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(ShadowCaster), reinterpret_cast<void*>(offsetof(ShadowCaster, anchor)));
+    for (u32 i = 0; i < 4; ++i) glVertexAttribDivisor(i, 1);
+    glBindVertexArray(0);
     batch_.init();
 }
 
 void MapRenderer::reload_art(JobSystem& jobs, const char* asset_dir) {
+    shadows_valid_ = false;
     art_ = load_terrain_art(jobs, asset_dir);
     ground_.create_array(art_.ground, TextureFilter::Trilinear, TextureWrap::Repeat);
     sprites_.create(art_.sprites, TextureFilter::Trilinear, TextureWrap::Clamp, kSpriteAtlasMipLevel);
@@ -269,6 +428,7 @@ void MapRenderer::reload_art(JobSystem& jobs, const char* asset_dir) {
 }
 
 void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
+    shadows_valid_ = false;
     const i32 w = map.width, h = map.height;
     map_width_ = w;
     map_height_ = h;
@@ -282,29 +442,52 @@ void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
     tiles_.create(tiles, TextureFilter::Nearest, TextureWrap::Clamp);
     depth_.create(hydro, TextureFilter::Linear, TextureWrap::Clamp);
 
-    const Relief relief = build_relief(map, jobs);
+    Relief relief = build_relief(map, jobs);
     relief_.create(relief.shape, TextureFilter::Linear, TextureWrap::Clamp);
     surface_.create(relief.surface, TextureFilter::Linear, TextureWrap::Clamp);
     height_range_ = relief.height_range;
     tiles_per_unit_ = static_cast<f32>(map.resolution);
+    height_width_ = relief.shape.width;
+    height_height_ = relief.shape.height;
+    heightfield_ = std::move(relief.heights);
+    for (f32& height : heightfield_) height *= tiles_per_unit_;
+    heights_.create_float(height_width_, height_height_, heightfield_.data());
+
+    chunks_.clear();
+    const f32 scale = static_cast<f32>(height_width_) / static_cast<f32>(w);
+    for (i32 y = 0; y < h; y += static_cast<i32>(kChunkSize)) {
+        for (i32 x = 0; x < w; x += static_cast<i32>(kChunkSize)) {
+            Chunk chunk{{static_cast<f32>(x), static_cast<f32>(y)}, 1.0e9f, 0.0f};
+            // Include the filter's neighbouring texels for a conservative bound.
+            const i32 x0 = std::max(0, static_cast<i32>(static_cast<f32>(x) * scale) - 1);
+            const i32 y0 = std::max(0, static_cast<i32>(static_cast<f32>(y) * scale) - 1);
+            const i32 x1 = std::min(height_width_ - 1, static_cast<i32>((static_cast<f32>(x) + kChunkSize) * scale) + 1);
+            const i32 y1 = std::min(height_height_ - 1, static_cast<i32>((static_cast<f32>(y) + kChunkSize) * scale) + 1);
+            for (i32 hy = y0; hy <= y1; ++hy) {
+                for (i32 hx = x0; hx <= x1; ++hx) {
+                    const f32 z = heightfield_[static_cast<size_t>(hy * height_width_ + hx)];
+                    chunk.low = std::min(chunk.low, z);
+                    chunk.high = std::max(chunk.high, z);
+                }
+            }
+            chunks_.push_back(chunk);
+        }
+    }
 
     build_decor(map);
 }
 
 void MapRenderer::build_decor(const TileMap& map) {
-    struct Placed {
-        f32 ground_y;
-        SpriteInstance sprite;
-    };
-    std::vector<Placed> placed;
-    placed.reserve(static_cast<size_t>(map.tile_count() / 3));
+    decor_.clear();
+    decor_.reserve(static_cast<size_t>(map.tile_count() / 3));
     const u32 seed = static_cast<u32>(mix64(map.seed));
 
     const auto add = [&](const SpriteSet& set, u32 pick, f32 gx, f32 gy, f32 scale, u32 color) {
         const SpriteDef& d = art_.defs[static_cast<size_t>(set.first + static_cast<i32>(pick % static_cast<u32>(set.count)))];
         SpriteInstance s;
-        s.x = gx - d.anchor_x * scale;
-        s.y = gy - d.anchor_y * scale;
+        // Offsets stay screen-aligned; the anchor itself lives in the world.
+        s.x = -d.anchor_x * scale;
+        s.y = -d.anchor_y * scale;
         s.w = d.width * scale;
         s.h = d.height * scale;
         s.u0 = d.u0;
@@ -312,7 +495,11 @@ void MapRenderer::build_decor(const TileMap& map) {
         s.u1 = d.u1;
         s.v1 = d.v1;
         s.color = color;
-        placed.push_back({gy, s});
+        s.anchor = d.anchor_y / d.height;
+        const bool casts = set.first == art_.broadleaf.first || set.first == art_.conifer.first ||
+            set.first == art_.bush.first || set.first == art_.stone.first || set.first == art_.iron.first ||
+            set.first == art_.gold.first || set.first == art_.boulder.first;
+        decor_.push_back({{gx, gy}, ground_height({gx, gy}), s, casts});
     };
 
     const f32 band = std::max(map.mountain_level - map.sea_level, 1.0e-4f);
@@ -388,63 +575,336 @@ void MapRenderer::build_decor(const TileMap& map) {
         }
     }
 
-    std::stable_sort(placed.begin(), placed.end(), [](const Placed& a, const Placed& b) { return a.ground_y < b.ground_y; });
-
-    decor_.resize(placed.size());
-    row_start_.assign(static_cast<size_t>(map.height) + 1, static_cast<u32>(placed.size()));
-    i32 row = 0;
-    for (size_t k = 0; k < placed.size(); ++k) {
-        decor_[k] = placed[k].sprite;
-        const i32 sprite_row = clamp(static_cast<i32>(std::floor(placed[k].ground_y)), 0, map.height - 1);
-        for (; row <= sprite_row; ++row) row_start_[static_cast<size_t>(row)] = static_cast<u32>(k);
+    for (i32 view = 0; view < 4; ++view) {
+        auto& order = decor_order_[view];
+        order.resize(decor_.size());
+        std::iota(order.begin(), order.end(), 0u);
+        IsometricCamera camera;
+        camera.rotation = view;
+        std::stable_sort(order.begin(), order.end(), [&](u32 a, u32 b) {
+            const Vec2 pa = camera.rotate(decor_[a].ground), pb = camera.rotate(decor_[b].ground);
+            return pa.x + pa.y < pb.x + pb.y;
+        });
     }
 }
 
-void MapRenderer::draw(const Camera2D& camera, const MapDrawOptions& options) {
-    // --- ground ---
+f32 MapRenderer::ground_height(Vec2 position) const {
+    if (heightfield_.empty()) return 0.0f;
+    // Match GL_LINEAR sampling exactly, including the half-texel offset.
+    const f32 x = clamp(position.x * static_cast<f32>(height_width_) / static_cast<f32>(map_width_) - 0.5f, 0.0f, static_cast<f32>(height_width_ - 1));
+    const f32 y = clamp(position.y * static_cast<f32>(height_height_) / static_cast<f32>(map_height_) - 0.5f, 0.0f, static_cast<f32>(height_height_ - 1));
+    const i32 ix = static_cast<i32>(x), iy = static_cast<i32>(y);
+    const i32 nx = std::min(ix + 1, height_width_ - 1), ny = std::min(iy + 1, height_height_ - 1);
+    const auto at = [&](i32 px, i32 py) { return heightfield_[static_cast<size_t>(py * height_width_ + px)]; };
+    return lerp(lerp(at(ix, iy), at(nx, iy), x - static_cast<f32>(ix)),
+                lerp(at(ix, ny), at(nx, ny), x - static_cast<f32>(ix)), y - static_cast<f32>(iy));
+}
+
+f32 MapRenderer::mesh_step(f32 zoom) const {
+    f32 step = tiles_per_unit_ / static_cast<f32>(kReliefTexelsPerUnit);
+    while (step * zoom < 6.0f && step < 4.0f) step *= 2.0f;
+    return step;
+}
+
+f32 MapRenderer::surface_height(Vec2 position, f32 zoom) const {
+    const f32 step = mesh_step(zoom);
+    const f32 x = clamp(position.x, 0.0f, static_cast<f32>(map_width_) - 1.0e-4f);
+    const f32 y = clamp(position.y, 0.0f, static_cast<f32>(map_height_) - 1.0e-4f);
+    const f32 x0 = std::floor(x / step) * step, y0 = std::floor(y / step) * step;
+    const f32 x1 = std::min(x0 + step, static_cast<f32>(map_width_)), y1 = std::min(y0 + step, static_cast<f32>(map_height_));
+    const f32 fx = (x - x0) / (x1 - x0), fy = (y - y0) / (y1 - y0);
+    const f32 h10 = ground_height({x1, y0}), h01 = ground_height({x0, y1});
+    if (fx + fy <= 1.0f) {
+        const f32 h00 = ground_height({x0, y0});
+        return h00 + (h10 - h00) * fx + (h01 - h00) * fy;
+    }
+    const f32 h11 = ground_height({x1, y1});
+    return h11 + (h01 - h11) * (1.0f - fx) + (h10 - h11) * (1.0f - fy);
+}
+
+bool MapRenderer::pick(const IsometricCamera& camera, Vec2 screen, Vec2& world) const {
+    const f32 top = height_range_ * tiles_per_unit_ + 1.0f;
+    const Vec2 origin = camera.screen_to_world(screen, top);
+    const Vec2 direction = camera.screen_to_world(screen, top - 1.0f) - origin;
+    f32 enter = 0.0f, leave = top + 0.01f;
+    const auto clip = [&](f32 start, f32 delta, f32 size) {
+        if (std::fabs(delta) < 1.0e-6f) return start >= 0 && start <= size;
+        f32 a = -start / delta, b = (size - start) / delta;
+        if (a > b) std::swap(a, b);
+        enter = std::max(enter, a);
+        leave = std::min(leave, b);
+        return enter <= leave;
+    };
+    if (!clip(origin.x, direction.x, static_cast<f32>(map_width_)) ||
+        !clip(origin.y, direction.y, static_cast<f32>(map_height_))) return false;
+
+    // Visit mesh cells from the eye towards the ground and intersect their
+    // actual triangles. Unlike fixed-step marching this also catches a ray
+    // grazing a narrow ridge, and returns the foremost of overlapping slopes.
+    const f32 step = mesh_step(camera.zoom);
+    const i32 columns = static_cast<i32>(std::ceil(static_cast<f32>(map_width_) / step));
+    const i32 rows = static_cast<i32>(std::ceil(static_cast<f32>(map_height_) / step));
+    const Vec2 first = origin + direction * (enter + 1.0e-4f);
+    i32 cx = clamp(static_cast<i32>(std::floor(first.x / step)), 0, columns - 1);
+    i32 cy = clamp(static_cast<i32>(std::floor(first.y / step)), 0, rows - 1);
+    for (i32 visited = 0; visited < columns + rows + 2; ++visited) {
+        if (cx < 0 || cy < 0 || cx >= columns || cy >= rows || enter > leave + 1.0e-4f) break;
+        const f32 x0 = static_cast<f32>(cx) * step, y0 = static_cast<f32>(cy) * step;
+        const f32 x1 = std::min(x0 + step, static_cast<f32>(map_width_)), y1 = std::min(y0 + step, static_cast<f32>(map_height_));
+        const f32 tx = ((direction.x > 0 ? x1 : x0) - origin.x) / direction.x;
+        const f32 ty = ((direction.y > 0 ? y1 : y0) - origin.y) / direction.y;
+        const f32 end = std::min(leave, std::min(tx, ty));
+        const f32 h00 = ground_height({x0, y0}), h10 = ground_height({x1, y0});
+        const f32 h01 = ground_height({x0, y1}), h11 = ground_height({x1, y1});
+        f32 nearest = leave + 1.0f;
+        for (i32 triangle = 0; triangle < 2; ++triangle) {
+            const f32 ax = (triangle == 0 ? h10 - h00 : h11 - h01) / (x1 - x0);
+            const f32 ay = (triangle == 0 ? h01 - h00 : h11 - h10) / (y1 - y0);
+            const f32 base = triangle == 0 ? h00 : h11 - ax * (x1 - x0) - ay * (y1 - y0);
+            const f32 denominator = 1.0f + ax * direction.x + ay * direction.y;
+            if (std::fabs(denominator) < 1.0e-7f) continue;
+            const f32 t = (top - base - ax * (origin.x - x0) - ay * (origin.y - y0)) / denominator;
+            if (t < enter - 1.0e-4f || t > end + 1.0e-4f) continue;
+            const Vec2 p = origin + direction * t;
+            const f32 diagonal = (p.x - x0) / (x1 - x0) + (p.y - y0) / (y1 - y0);
+            if ((triangle == 0 && diagonal <= 1.0001f) || (triangle == 1 && diagonal >= 0.9999f)) nearest = std::min(nearest, t);
+        }
+        if (nearest <= leave) {
+            world = origin + direction * nearest;
+            return true;
+        }
+        if (tx <= ty + 1.0e-5f) cx += direction.x > 0 ? 1 : -1;
+        if (ty <= tx + 1.0e-5f) cy += direction.y > 0 ? 1 : -1;
+        enter = end;
+    }
+    return false;
+}
+
+void MapRenderer::frame_map(IsometricCamera& camera) const {
+    Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
+    // Project each chunk's height bounds, not just the four ground corners:
+    // summits can extend beyond the map's diamond, especially on small maps.
+    for (const Chunk& chunk : chunks_) {
+        for (i32 corner = 0; corner < 4; ++corner) {
+            const Vec2 p{std::min(chunk.origin.x + static_cast<f32>(corner & 1) * kChunkSize, static_cast<f32>(map_width_)),
+                         std::min(chunk.origin.y + static_cast<f32>(corner >> 1) * kChunkSize, static_cast<f32>(map_height_))};
+            for (f32 z : {-1.5f * tiles_per_unit_, chunk.high + 3.0f}) {
+                const Vec2 q = camera.project(p, z);
+                lo.x = std::min(lo.x, q.x); lo.y = std::min(lo.y, q.y);
+                hi.x = std::max(hi.x, q.x); hi.y = std::max(hi.y, q.y);
+            }
+        }
+    }
+    camera.center_height = ground_height({static_cast<f32>(map_width_) * 0.5f, static_cast<f32>(map_height_) * 0.5f});
+    camera.center = camera.unproject((lo + hi) * 0.5f, camera.center_height);
+    camera.zoom = std::min(camera.viewport.x / (hi.x - lo.x), camera.viewport.y / (hi.y - lo.y)) * 0.94f;
+}
+
+void MapRenderer::update_shadows(const IsometricCamera& camera) {
+    const f32 top = height_range_ * tiles_per_unit_ + 8.0f;
+    Vec2 low{1.0e9f, 1.0e9f}, high{-1.0e9f, -1.0e9f};
+    for (i32 corner = 0; corner < 4; ++corner) {
+        const Vec2 screen{(corner & 1) ? camera.viewport.x : 0.0f, (corner & 2) ? camera.viewport.y : 0.0f};
+        for (f32 height : {0.0f, top}) {
+            const Vec2 p = camera.screen_to_world(screen, height);
+            low.x = std::min(low.x, p.x); low.y = std::min(low.y, p.y);
+            high.x = std::max(high.x, p.x); high.y = std::max(high.y, p.y);
+        }
+    }
+    low.x = clamp(low.x, 0.0f, static_cast<f32>(map_width_));
+    low.y = clamp(low.y, 0.0f, static_cast<f32>(map_height_));
+    high.x = clamp(high.x, 0.0f, static_cast<f32>(map_width_));
+    high.y = clamp(high.y, 0.0f, static_cast<f32>(map_height_));
+    // The map is projected along sun rays onto z=0. Fit visible receivers at
+    // every elevation; select casters in this light-space volume, including
+    // offscreen mountains and trees whose shadows enter the camera view.
+    low -= Vec2{4, 4};
+    high -= shadow_view_.light * top;
+    high += Vec2{4, 4};
+    const f32 span = std::ceil(std::max(high.x - low.x, high.y - low.y) / 8.0f) * 8.0f;
+    const f32 texel = span / static_cast<f32>(kShadowResolution);
+    const Vec2 origin{std::floor(low.x / texel) * texel, std::floor(low.y / texel) * texel};
+    const f32 step = mesh_step(camera.zoom);
+    if (shadows_valid_ && shadow_rotation_ == camera.rotation && shadow_step_ == step &&
+        shadow_view_.origin.x == origin.x && shadow_view_.origin.y == origin.y && shadow_view_.size.x == span) return;
+    shadow_view_.origin = origin;
+    shadow_view_.size = {span, span};
+    shadow_view_.height = top;
+    shadow_rotation_ = camera.rotation;
+    shadow_step_ = step;
+
+    GLint draw_fbo = 0, read_fbo = 0, viewport[4];
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_);
+    glViewport(0, 0, kShadowResolution, kShadowResolution);
+    glDepthMask(GL_TRUE);
+    glClearDepth(1.0);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+
+    const auto intersects = [&](Vec2 lo, Vec2 hi) {
+        return hi.x >= origin.x && hi.y >= origin.y && lo.x <= origin.x + span && lo.y <= origin.y + span;
+    };
+    std::vector<Vec2> caster_chunks;
+    for (const Chunk& chunk : chunks_) {
+        Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
+        for (i32 corner = 0; corner < 4; ++corner) {
+            const Vec2 p = chunk.origin + Vec2{(corner & 1) ? kChunkSize : 0.0f, (corner & 2) ? kChunkSize : 0.0f};
+            for (f32 z : {chunk.low, chunk.high}) {
+                const Vec2 q = p - shadow_view_.light * z;
+                lo.x = std::min(lo.x, q.x); lo.y = std::min(lo.y, q.y);
+                hi.x = std::max(hi.x, q.x); hi.y = std::max(hi.y, q.y);
+            }
+        }
+        if (intersects(lo, hi)) caster_chunks.push_back(chunk.origin);
+    }
+    terrain_depth_.bind();
+    bind_shadows(terrain_depth_, &shadow_view_);
+    glUniform1i(terrain_depth_.uniform("uShadowPass"), 1);
+    glUniform1i(terrain_depth_.uniform("uHeights"), 5);
+    glUniform2f(terrain_depth_.uniform("uMapSize"), static_cast<f32>(map_width_), static_cast<f32>(map_height_));
+    glUniform1f(terrain_depth_.uniform("uStep"), step);
+    const i32 cells = static_cast<i32>(kChunkSize / step);
+    glUniform1i(terrain_depth_.uniform("uCells"), cells);
+    glUniform1i(terrain_depth_.uniform("uWall"), 0);
+    heights_.bind(5);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, chunk_buffer_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(caster_chunks.size() * sizeof(Vec2)), caster_chunks.data(), GL_STREAM_DRAW);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, cells * cells * 6, static_cast<GLsizei>(caster_chunks.size()));
+
+    const Vec2 right = camera.unrotate({IsometricCamera::kX, -IsometricCamera::kX});
+    std::vector<ShadowCaster> casters;
+    casters.reserve(decor_.size() / 2);
+    for (const Decor& decor : decor_) {
+        if (!decor.casts_shadow) continue;
+        const SpriteInstance& sprite = decor.sprite;
+        const f32 height = surface_height(decor.ground, camera.zoom);
+        Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
+        for (i32 corner = 0; corner < 4; ++corner) {
+            const Vec2 p = decor.ground + right * (sprite.x + ((corner & 1) ? sprite.w : 0.0f));
+            const f32 z = height - (sprite.y + ((corner & 2) ? sprite.h * sprite.anchor : 0.0f)) / IsometricCamera::kZ;
+            const Vec2 q = p - shadow_view_.light * z;
+            lo.x = std::min(lo.x, q.x); lo.y = std::min(lo.y, q.y);
+            hi.x = std::max(hi.x, q.x); hi.y = std::max(hi.y, q.y);
+        }
+        if (!intersects(lo, hi)) continue;
+        casters.push_back({decor.ground.x, decor.ground.y, height, sprite.x, sprite.y, sprite.w, sprite.h,
+                           sprite.u0, sprite.v0, sprite.u1, sprite.v1, sprite.anchor});
+    }
+    scenery_depth_.bind();
+    bind_shadows(scenery_depth_, &shadow_view_);
+    glUniform2f(scenery_depth_.uniform("uRight"), right.x, right.y);
+    glUniform1i(scenery_depth_.uniform("uAtlas"), 0);
+    sprites_.bind(0);
+    glBindVertexArray(caster_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, caster_buffer_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(casters.size() * sizeof(ShadowCaster)), casters.data(), GL_STREAM_DRAW);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, static_cast<GLsizei>(casters.size()));
+    glBindVertexArray(0);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(draw_fbo));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(read_fbo));
+    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+    shadows_valid_ = true;
+}
+
+void MapRenderer::draw(const IsometricCamera& camera, const MapDrawOptions& options) {
+    if (options.shadows) update_shadows(camera);
+    glClearColor(0.030f, 0.036f, 0.046f, 1.0f);
+    glDepthMask(GL_TRUE);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDisable(GL_CULL_FACE);  // either side of steep relief can face the camera
     glDisable(GL_BLEND);
     terrain_.bind();
-    const f32 inv_zoom = 1.0f / camera.zoom;
-    glUniform4f(u_world_, inv_zoom, -inv_zoom, camera.center.x - camera.viewport.x * 0.5f * inv_zoom, camera.center.y + camera.viewport.y * 0.5f * inv_zoom);
+    bind_shadows(terrain_, options.shadows ? &shadow_view_ : nullptr);
+    glUniform1i(terrain_.uniform("uShadowPass"), 0);
+    const Camera2D plane = camera.plane_camera();
+    const Vec2 scale = plane.clip_scale(), offset = plane.clip_offset();
+    glUniform4f(u_view_, scale.x, scale.y, offset.x, offset.y);
+    const Vec2 rx = camera.rotate({1, 0}), ry = camera.rotate({0, 1});
+    const f32 rotation[] = {rx.x, rx.y, ry.x, ry.y};
+    glUniformMatrix2fv(u_rotation_, 1, GL_FALSE, rotation);
+    const f32 depth_scale = 1.0f / (static_cast<f32>(map_width_ + map_height_) + height_range_ * tiles_per_unit_ + 32.0f);
+    glUniform1f(u_depth_scale_, depth_scale);
     glUniform2f(u_map_size_, static_cast<f32>(map_width_), static_cast<f32>(map_height_));
     glUniform1f(u_time_, options.time);
     glUniform1f(u_grid_, options.grid ? 1.0f : 0.0f);
     glUniform1i(u_overlay_, static_cast<int>(options.overlay));
-    glUniform1f(u_pixel_, inv_zoom);
-    glUniform1f(u_height_range_, height_range_);
+    glUniform1f(u_pixel_, 1.0f / camera.zoom);
     glUniform1f(u_unit_, tiles_per_unit_);
     tiles_.bind(0);
     relief_.bind(1);
     depth_.bind(2);
     ground_.bind(3);
     surface_.bind(4);
-    glBindVertexArray(vao_);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    heights_.bind(5);
 
-    // --- scenery ---
-    sprites_drawn_ = 0;
-    if (camera.zoom < kDecorMinZoom || decor_.empty()) return;
-    const Vec2 lo = camera.visible_min(), hi = camera.visible_max();
-    // Sprites rise above their ground row, so look a few rows further south.
-    const i32 first_row = clamp(static_cast<i32>(std::floor(lo.y)) - 1, 0, map_height_);
-    const i32 last_row = clamp(static_cast<i32>(std::floor(hi.y)) + 5, 0, map_height_);
-    const u32 begin = row_start_[static_cast<size_t>(first_row)], end = row_start_[static_cast<size_t>(last_row)];
-    if (end <= begin) return;
-
-    SpriteInstance* out = batch_.begin(end - begin);
-    u32 count = 0;
-    if (lo.x <= 0.0f && hi.x >= static_cast<f32>(map_width_)) {
-        count = end - begin;
-        std::memcpy(out, decor_.data() + begin, static_cast<size_t>(count) * sizeof(SpriteInstance));
-    } else {
-        for (u32 k = begin; k < end; ++k) {
-            const SpriteInstance& s = decor_[k];
-            if (s.x > hi.x || s.x + s.w < lo.x) continue;
-            out[count++] = s;
+    // All visible chunks share a tessellation level, so their edges match.
+    // Distant views avoid submitting millions of subpixel triangles.
+    const f32 step = mesh_step(camera.zoom);
+    const i32 cells = static_cast<i32>(kChunkSize / step);
+    glUniform1f(u_step_, step);
+    glUniform1i(u_cells_, cells);
+    glUniform1i(u_wall_, 0);
+    visible_chunks_.clear();
+    for (const Chunk& chunk : chunks_) {
+        Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
+        for (i32 corner = 0; corner < 4; ++corner) {
+            const Vec2 p = chunk.origin + Vec2{static_cast<f32>(corner & 1) * kChunkSize, static_cast<f32>(corner >> 1) * kChunkSize};
+            for (f32 z : {chunk.low, chunk.high}) {
+                const Vec2 q = camera.world_to_screen(p, z);
+                lo.x = std::min(lo.x, q.x); lo.y = std::min(lo.y, q.y);
+                hi.x = std::max(hi.x, q.x); hi.y = std::max(hi.y, q.y);
+            }
         }
+        if (hi.x < -2 || hi.y < -2 || lo.x > camera.viewport.x + 2 || lo.y > camera.viewport.y + 2) continue;
+        visible_chunks_.push_back(chunk.origin);
     }
-    batch_.draw(count, camera, sprites_);
-    sprites_drawn_ = count;
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, chunk_buffer_);
+    // One spare entry also makes the border draw valid when no chunks are visible.
+    if (visible_chunks_.empty()) visible_chunks_.push_back({0, 0});
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(visible_chunks_.size() * sizeof(Vec2)), visible_chunks_.data(), GL_STREAM_DRAW);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, cells * cells * 6, static_cast<GLsizei>(visible_chunks_.size()));
+    glUniform1i(u_wall_, 1);
+    const i32 edge_segments = static_cast<i32>(std::ceil(static_cast<f32>(map_width_) / step) + std::ceil(static_cast<f32>(map_height_) / step)) * 2;
+    glDrawArraysInstanced(GL_TRIANGLES, 0, edge_segments * 6, 1);
+
+    sprites_drawn_ = 0;
+    if (camera.zoom >= kDecorMinZoom && !decor_.empty()) {
+        SpriteInstance* out = batch_.begin(static_cast<u32>(decor_.size()));
+        const auto& order = decor_order_[(camera.rotation % 4 + 4) % 4];
+        for (const u32 k : order) {
+            const Decor& decor = decor_[k];
+            Vec2 projected = camera.project(decor.ground, decor.height);
+            SpriteInstance sprite = decor.sprite;
+            sprite.x += projected.x;
+            sprite.y += projected.y;
+            const Vec2 screen = (Vec2{sprite.x, sprite.y} - plane.center) * camera.zoom + camera.viewport * 0.5f;
+            if (screen.x + sprite.w * camera.zoom < -4 || screen.y + sprite.h * camera.zoom < -4 || screen.x > camera.viewport.x + 4 || screen.y > camera.viewport.y + 4) continue;
+            const f32 height = surface_height(decor.ground, camera.zoom);
+            projected = camera.project(decor.ground, height);
+            sprite.y = decor.sprite.y + projected.y;
+            sprite.depth = -camera.depth(decor.ground, height) * depth_scale - 0.025f * depth_scale;
+            sprite.depth_span = sprite.h / (2.0f * IsometricCamera::kZ) * depth_scale;
+            sprite.ground_span = -sprite.h * (IsometricCamera::kDepthXY / IsometricCamera::kY) * depth_scale;
+            out[sprites_drawn_++] = sprite;
+        }
+        // Sort back to front, retain transparent edges, and compare every pixel
+        // with terrain. Transparent canvas pixels never occlude another object.
+        glDepthMask(GL_FALSE);
+        batch_.draw(sprites_drawn_, plane, sprites_, options.shadows ? &shadow_view_ : nullptr, &camera, depth_scale);
+        glDepthMask(GL_TRUE);
+    }
+    glDisable(GL_DEPTH_TEST);
 }
 
 }  // namespace zl

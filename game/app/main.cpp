@@ -32,9 +32,11 @@ struct Options {
     bool whole_map = false;
     bool have_center = false;
     Vec2 center{0, 0};
+    i32 rotation = 0;                  // clockwise quarter turns
     f32 time = 0.0f;
     MapOverlay overlay = MapOverlay::None;
     bool grid = false;
+    bool shadows = true;
 };
 
 void usage() {
@@ -51,10 +53,12 @@ void usage() {
         "  --whole-map          frame the entire map (default: the start area)\n"
         "  --center X Y         centre the view on a tile\n"
         "  --zoom PIXELS        pixels per tile\n"
+        "  --rotation DEGREES   camera angle: 0, 90, 180 or 270\n"
         "  --overlay MODE       debug view: height or pass\n"
         "  --grid               draw tile borders\n"
+        "  --no-shadows         disable cast shadows for comparisons\n"
         "controls: WASD/arrows or right-drag to pan, wheel to zoom, R new map,\n"
-        "          V cycle overlay (height, passability),\n"
+        "          Q/E rotate 90 degrees, V cycle overlay (height, passability),\n"
         "          G grid, F whole map, H start area, F2 screenshot, F5 reload art, Esc quit");
 }
 
@@ -79,8 +83,14 @@ bool parse(int argc, char** argv, Options& o) {
         else if (is("--bench")) o.bench = true;
         else if (is("--whole-map")) o.whole_map = true;
         else if (is("--zoom")) o.zoom = static_cast<f32>(std::atof(next()));
+        else if (is("--rotation")) {
+            const i32 degrees = std::atoi(next());
+            if (degrees % 90 != 0) { usage(); return false; }
+            o.rotation = (degrees / 90 % 4 + 4) % 4;
+        }
         else if (is("--time")) o.time = static_cast<f32>(std::atof(next()));
         else if (is("--grid")) o.grid = true;
+        else if (is("--no-shadows")) o.shadows = false;
         else if (is("--overlay")) {
             const char* mode = next();
             if (!std::strcmp(mode, "height")) o.overlay = MapOverlay::Height;
@@ -121,16 +131,13 @@ std::string find_assets(const char* requested) {
 }
 
 f32 fit_zoom(const TileMap& map, Vec2 viewport) {
-    return std::min(viewport.x / static_cast<f32>(map.width), viewport.y / static_cast<f32>(map.height));
+    const f32 diagonal = static_cast<f32>(map.width + map.height);
+    return std::min(viewport.x / (diagonal * IsometricCamera::kX), viewport.y / (diagonal * IsometricCamera::kY));
 }
 
-void frame_whole_map(Camera2D& camera, const TileMap& map) {
-    camera.center = {static_cast<f32>(map.width) * 0.5f, static_cast<f32>(map.height) * 0.5f};
-    camera.zoom = fit_zoom(map, camera.viewport);
-}
-
-void frame_start(Camera2D& camera, const TileMap& map) {
+void frame_start(IsometricCamera& camera, const TileMap& map, const MapRenderer& renderer) {
     camera.center = {static_cast<f32>(map.start.x) + 0.5f, static_cast<f32>(map.start.y) + 0.5f};
+    camera.center_height = renderer.ground_height(camera.center);
     camera.zoom = static_cast<f32>(kArtTilePixels);
 }
 
@@ -141,7 +148,7 @@ void log_map(const TileMap& map) {
            s.walkable_tiles ? 100.0 * s.reachable_tiles / s.walkable_tiles : 0.0);
 }
 
-bool save_screenshot(MapRenderer& renderer, const Camera2D& camera, const MapDrawOptions& draw, const char* path) {
+bool save_screenshot(MapRenderer& renderer, const IsometricCamera& camera, const MapDrawOptions& draw, const char* path) {
     RenderTarget target;
     target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
     target.bind();
@@ -155,7 +162,7 @@ bool save_screenshot(MapRenderer& renderer, const Camera2D& camera, const MapDra
 // Renders a fixed view repeatedly into an off-screen target. "submit" is the
 // CPU time the engine spends per frame (culling, filling the instance buffer,
 // issuing draw calls); "frame" also waits for the GPU to finish.
-void bench_view(const char* name, MapRenderer& renderer, const Camera2D& camera) {
+void bench_view(const char* name, MapRenderer& renderer, const IsometricCamera& camera) {
     RenderTarget target;
     target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
     target.bind();
@@ -263,32 +270,41 @@ int main(int argc, char** argv) {
     }
     log_map(map);
 
-    Camera2D camera;
+    IsometricCamera camera;
+    camera.rotation = options.rotation;
     camera.viewport = {static_cast<f32>(options.width), static_cast<f32>(options.height)};
-    if (options.whole_map) frame_whole_map(camera, map);
-    else frame_start(camera, map);
-    if (options.have_center) camera.center = options.center;
+    if (options.whole_map) renderer.frame_map(camera);
+    else frame_start(camera, map, renderer);
+    if (options.have_center) {
+        camera.center = options.center;
+        camera.center_height = renderer.ground_height(camera.center);
+    }
     if (options.zoom > 0.0f) camera.zoom = options.zoom;
 
     MapDrawOptions draw;
     draw.time = options.time;
     draw.overlay = options.overlay;
     draw.grid = options.grid;
+    draw.shadows = options.shadows;
 
     if (options.bench) {
-        std::printf("renderer, %dx%d, 2 draw calls per frame\n", options.width, options.height);
-        Camera2D view = camera;
-        frame_start(view, map);
+        std::printf("isometric renderer, %dx%d, up to 3 visible draws plus 2 cached shadow draws\n", options.width, options.height);
+        IsometricCamera view = camera;
+        frame_start(view, map, renderer);
         bench_view("start", renderer, view);
         view.zoom = 12.0f;
         bench_view("zoomed out", renderer, view);
-        frame_whole_map(view, map);
+        renderer.frame_map(view);
         bench_view("whole map", renderer, view);
 
         std::printf("sprite batch, 1 draw call per frame\n");
         SpriteBatch horde;
         horde.init();
-        for (const u32 count : {10000u, 100000u, 250000u}) bench_horde(count, renderer, map, jobs, horde, view);
+        Camera2D stress;
+        stress.viewport = camera.viewport;
+        stress.center = {static_cast<f32>(map.width) * 0.5f, static_cast<f32>(map.height) * 0.5f};
+        stress.zoom = std::min(stress.viewport.x / static_cast<f32>(map.width), stress.viewport.y / static_cast<f32>(map.height));
+        for (const u32 count : {10000u, 100000u, 250000u}) bench_horde(count, renderer, map, jobs, horde, stress);
         return 0;
     }
 
@@ -316,11 +332,20 @@ int main(int argc, char** argv) {
             map = generate_map(options.map, jobs);
             renderer.set_map(map, jobs);
             log_map(map);
+            camera.center_height = renderer.ground_height(camera.center);
         }
         if (in.pressed(Key::G)) draw.grid = !draw.grid;
         if (in.pressed(Key::V)) draw.overlay = static_cast<MapOverlay>((static_cast<int>(draw.overlay) + 1) % static_cast<int>(MapOverlay::Count));
-        if (in.pressed(Key::F)) frame_whole_map(camera, map);
-        if (in.pressed(Key::H)) frame_start(camera, map);
+        if (in.pressed(Key::Q) || in.pressed(Key::E)) {
+            Vec2 focus;
+            if (renderer.pick(camera, camera.viewport * 0.5f, focus)) {
+                camera.center = focus;
+                camera.center_height = renderer.surface_height(focus, camera.zoom);
+            }
+            camera.turn(in.pressed(Key::E) ? 1 : -1);
+        }
+        if (in.pressed(Key::F)) renderer.frame_map(camera);
+        if (in.pressed(Key::H)) frame_start(camera, map, renderer);
         if (in.pressed(Key::F5)) {
             const std::string assets = find_assets(options.assets);
             const Stopwatch timer;
@@ -337,10 +362,19 @@ int main(int argc, char** argv) {
         if (in.down(Key::D) || in.down(Key::Right)) pan.x += 1.0f;
         if (in.down(Key::W) || in.down(Key::Up)) pan.y -= 1.0f;
         if (in.down(Key::S) || in.down(Key::Down)) pan.y += 1.0f;
-        const f32 speed = (in.down(Key::LeftShift) ? 2400.0f : 1000.0f) / camera.zoom;
-        camera.center += pan * (speed * static_cast<f32>(dt));
-        if (in.down(MouseButton::Right) || in.down(MouseButton::Middle)) camera.center -= in.mouse_delta / camera.zoom;
-        if (in.scroll != 0.0f) camera.zoom_at(in.mouse, std::pow(1.15f, in.scroll), fit_zoom(map, camera.viewport) * 0.7f, 128.0f);
+        const f32 speed = in.down(Key::LeftShift) ? 2400.0f : 1000.0f;
+        if (length(pan) > 0.0f) pan = pan / length(pan);
+        camera.center += camera.screen_delta_to_world(pan * (speed * static_cast<f32>(dt)));
+        if (in.down(MouseButton::Right) || in.down(MouseButton::Middle)) camera.center -= camera.screen_delta_to_world(in.mouse_delta);
+        if (in.scroll != 0.0f) {
+            Vec2 anchor;
+            const bool hit = renderer.pick(camera, in.mouse, anchor);
+            const f32 height = hit ? renderer.surface_height(anchor, camera.zoom) : camera.center_height;
+            if (!hit) anchor = camera.screen_to_world(in.mouse, height);
+            camera.zoom = clamp(camera.zoom * std::pow(1.15f, in.scroll), fit_zoom(map, camera.viewport) * 0.5f, 128.0f);
+            const f32 new_height = hit ? renderer.surface_height(anchor, camera.zoom) : height;
+            camera.center += anchor - camera.screen_to_world(in.mouse, new_height);
+        }
         camera.center.x = clamp(camera.center.x, 0.0f, static_cast<f32>(map.width));
         camera.center.y = clamp(camera.center.y, 0.0f, static_cast<f32>(map.height));
 
@@ -365,9 +399,9 @@ int main(int argc, char** argv) {
         title_timer += dt;
         if (title_timer >= 0.5) {
             char title[200];
-            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | 2 draw calls",
+            std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | isometric %d deg | Q/E rotate",
                           static_cast<unsigned long long>(map.seed), map.width, map.height, frames / title_timer, frame_ms_sum / frames,
-                          renderer.sprites_drawn());
+                          renderer.sprites_drawn(), camera.rotation * 90);
             window.set_title(title);
             title_timer = 0.0;
             frame_ms_sum = 0.0;

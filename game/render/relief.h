@@ -3,6 +3,8 @@
 // them; mountains get an eroded surface with branching ridges and valleys.
 #pragma once
 
+#include <vector>
+
 #include "core/base.h"
 #include "core/image.h"
 #include "world/tilemap.h"
@@ -22,6 +24,9 @@ struct Relief {
     // summit). g: how much of a cliff face this point is. b: height level, as a
     // fraction of the highest level, sloping across ramps.
     Image surface;
+    // Full precision geometry, in world units. Lighting's packed 8-bit height
+    // is insufficient for displaced geometry and would leave visible bands.
+    std::vector<f32> heights;
     f32 height_range = 1.0f;  // height in world units that shape.b == 1 stands for
 };
 

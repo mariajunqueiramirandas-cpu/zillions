@@ -12,12 +12,15 @@ about choosing which chokepoints to hold. See [the design notes](docs/design.md)
 So far only the engine and the map generator exist; the colony, the economy and
 the horde are still to build.
 
-![A generated map](docs/screenshots/map-seed-7.jpg)
+The world uses a 2:1 isometric view with displaced terrain, raised plateaus,
+sloping ramps, and depth-tested scenery. **Q / E** turn the view by 90° around
+the terrain at the centre of the screen. See the [isometric viewer notes](docs/isometric.md).
+
+![An isometric generated map](docs/screenshots/isometric-world.png)
 
 | | |
 |---|---|
-| ![Mountains](docs/screenshots/mountains.jpg) | ![Cliffs and ramps](docs/screenshots/cliffs-ramps.jpg) |
-| ![Start area](docs/screenshots/start-area.jpg) | ![Open country](docs/screenshots/river-forest.jpg) |
+| ![Isometric mountains and cliffs](docs/screenshots/isometric-detail-0.png) | ![The same terrain rotated 90 degrees](docs/screenshots/isometric-detail-90.png) |
 
 ## Generated artwork
 
@@ -53,13 +56,14 @@ which need no windowing system or GPU.
 zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no-vsync]
          [--assets DIR]
          [--screenshot FILE [--whole-map | --center X Y] [--zoom PIXELS]]
-         [--overlay height|pass] [--grid] [--bench]
+         [--rotation 0|90|180|270] [--overlay height|pass] [--grid] [--bench]
 ```
 
 | Input | Action |
 |---|---|
 | WASD / arrows, right-drag | pan (Shift: faster) |
 | mouse wheel | zoom about the cursor |
+| Q / E | rotate the world 90° counterclockwise / clockwise |
 | R or Space | generate the next seed |
 | F / H | frame the whole map / the start area |
 | G | tile grid |
@@ -94,7 +98,7 @@ line on every border a cliff blocks:
 engine/core      types, RNG and hashing, job system, clock, images
 engine/math      vectors, simplex / fBm / ridged noise
 engine/platform  window, OpenGL context, input (GLFW)
-engine/gfx       shaders, textures, render targets, 2D camera, sprite batch
+engine/gfx       shaders, textures, colour/depth targets, isometric and 2D cameras, sprite batch
 game/world       tile map, map generator, CPU preview        (headless)
 game/render      terrain shader, relief/erosion, art loading and placeholders
 game/app         the viewer executable
@@ -108,11 +112,15 @@ simulation can run in tests, tools and (later) a server.
 
 ## Engine notes
 
-- **Two draw calls per frame.** The ground is one full-screen shader pass: each
-  pixel looks up its four nearest tiles in a data texture and blends their
-  materials, so cost depends on screen resolution, not map size. Everything
-  standing on the ground is one instanced draw: 28 bytes per sprite written
-  straight into mapped GPU memory, quad corners derived from `gl_VertexID`.
+- **Up to three draw calls per frame.** Visible terrain chunks are one instanced
+  height-displaced mesh with distance-dependent tessellation; a second draw
+  closes the map edges with rock faces. Materials blend in world coordinates.
+  Scenery uses one instanced draw with 44 bytes per sprite, including upright
+  and contact-shadow depth. Quad corners are derived from `gl_VertexID`.
+- **Height and occlusion.** A full-precision height texture drives geometry,
+  scenery anchors, and terrain picking. The live window and screenshot targets
+  both have depth buffers. Four cached scenery orders handle camera rotation,
+  and terrain hides objects on the far sides of cliffs and mountains.
 - **Job system.** A persistent thread pool with a blocking `parallel_for`;
   chunks are claimed with a single atomic add.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is

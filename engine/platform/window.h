@@ -70,6 +70,7 @@ private:
     Vec2 last_mouse_{0, 0};
     bool have_mouse_ = false;
     f32 pending_scroll_ = 0.0f;
+    bool pending_key_pressed_[static_cast<int>(Key::Count)] = {};
 };
 
 }  // namespace zl

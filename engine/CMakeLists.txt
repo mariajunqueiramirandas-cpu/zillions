@@ -26,6 +26,7 @@ if(ZL_BUILD_APP)
   add_library(zl_gfx STATIC
     gfx/render_target.cpp
     gfx/shader.cpp
+    gfx/shadows.cpp
     gfx/sprite_batch.cpp
     gfx/texture.cpp
     platform/window.cpp)

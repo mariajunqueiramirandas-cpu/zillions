@@ -4,3 +4,11 @@ target_link_libraries(zl_tests PRIVATE zl_art zl_options)
 # The art tests load the painted assets from the source tree.
 target_compile_definitions(zl_tests PRIVATE ZL_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
 add_test(NAME zl_tests COMMAND zl_tests)
+
+if(ZL_BUILD_APP)
+  # Explicit opt-in: run under Xvfb (or a real display). Ordinary CTest stays
+  # headless and does not require a display server.
+  add_executable(zl_render_tests render_test.cpp)
+  target_link_libraries(zl_render_tests PRIVATE zl_render zl_options)
+  target_compile_definitions(zl_render_tests PRIVATE ZL_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
+endif()

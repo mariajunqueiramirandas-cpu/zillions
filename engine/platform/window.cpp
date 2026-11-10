@@ -29,8 +29,8 @@ Window::Window(const WindowConfig& config) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
     glfwWindowHint(GLFW_VISIBLE, config.visible ? GLFW_TRUE : GLFW_FALSE);
-    // The 2D renderer needs neither depth nor stencil.
-    glfwWindowHint(GLFW_DEPTH_BITS, 0);
+    // Isometric terrain and upright scenery share a real depth buffer.
+    glfwWindowHint(GLFW_DEPTH_BITS, 24);
     glfwWindowHint(GLFW_STENCIL_BITS, 0);
 #ifndef NDEBUG
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
@@ -51,6 +51,13 @@ Window::Window(const WindowConfig& config) {
 #endif
 
     glfwSetWindowUserPointer(window_, this);
+    glfwSetKeyCallback(window_, [](GLFWwindow* w, int key, int, int action, int) {
+        // Capture edges from the event queue. A short tap may be both pressed
+        // and released between two rendered frames; polling state loses it.
+        if (key >= 0 && key < static_cast<int>(Key::Count) && action == GLFW_PRESS) {
+            static_cast<Window*>(glfwGetWindowUserPointer(w))->pending_key_pressed_[key] = true;
+        }
+    });
     glfwSetScrollCallback(window_, [](GLFWwindow* w, double, double dy) {
         static_cast<Window*>(glfwGetWindowUserPointer(w))->pending_scroll_ += static_cast<f32>(dy);
     });
@@ -80,7 +87,8 @@ void Window::poll() {
 
     for (int k = static_cast<int>(Key::Space); k < static_cast<int>(Key::Count); ++k) {
         const bool down = glfwGetKey(window_, k) == GLFW_PRESS;
-        input_.key_pressed[k] = down && !input_.key_down[k];
+        input_.key_pressed[k] = pending_key_pressed_[k];
+        pending_key_pressed_[k] = false;
         input_.key_down[k] = down;
     }
     for (int b = 0; b < static_cast<int>(MouseButton::Count); ++b) {

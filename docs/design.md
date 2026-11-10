@@ -14,7 +14,7 @@ the colony.
 ## Decided so far
 
 - **Inspiration:** *They Are Billions*.
-- **View:** 2D, top-down, on a tile grid.
+- **View:** 2D isometric on a tile grid, with terrain height and 90° camera rotation (Q / E).
 - **Scale:** hordes in the thousands, which is why the game sits on its own
   C++ engine built for throughput.
 - **Maps:** generated from a seed, with the colony starting at the centre on
