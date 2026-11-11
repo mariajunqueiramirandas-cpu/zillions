@@ -1,7 +1,6 @@
-// A figure is a character described entirely in code: a list of rounded cones
-// in three dimensions, each with a colour and a material. There is no image
-// behind it. The rig that poses the cones lives in actor/human.*; the shader
-// that paints them is in render/figure_renderer.*. Everything here is headless.
+// A figure describes a character as rounded cones in three dimensions, plus
+// material references for painted tool cutouts. Body shapes and hand poses are
+// headless; the renderer loads the image-model tool art and samples its alpha.
 #pragma once
 
 #include <vector>
@@ -23,6 +22,8 @@ enum class FigureMaterial : u8 {
     Leather,  // dark in shadow, a dull sheen
     Hair,     // streaked along its length
     Metal,    // hard highlight
+    ToolAxe,     // image-model artwork attached to the hand rig
+    ToolPickaxe,
     Count
 };
 
@@ -33,8 +34,9 @@ enum : u8 {
 };
 }
 
-// One rounded cone: every point within `ra` of `a`, within `rb` of `b`, and
-// everything between. Positions are in figure space: tiles, x east, y south,
+// Body materials define a rounded cone: every point within `ra` of `a`, within
+// `rb` of `b`, and everything between. Tool materials use a..b as the image's
+// centerline and ra as its half-width. Positions are in figure space: tiles, x east, y south,
 // z up, with the origin on the ground where the figure stands.
 struct FigurePart {
     Vec3 a, b;

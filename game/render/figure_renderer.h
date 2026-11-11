@@ -1,5 +1,6 @@
 // Paints the live procedural pose into a small transparent atlas, then draws
-// it as a softly filtered sprite. Smooth mode draws the cones directly.
+// it as a softly filtered sprite. Smooth mode draws body shapes directly.
+// Both modes attach image-model tool artwork to the same 3D hand rig.
 #pragma once
 
 #include <vector>
@@ -30,7 +31,8 @@ public:
     FigureRenderer(const FigureRenderer&) = delete;
     FigureRenderer& operator=(const FigureRenderer&) = delete;
 
-    void init();
+    void init(const char* asset_dir = nullptr);
+    void reload_art(const char* asset_dir);
     void set_style(FigureStyle style) { style_ = style; }
     FigureStyle style() const { return style_; }
     u32 draw_calls() const { return draw_calls_; }
@@ -49,6 +51,8 @@ private:
     FigureStyle style_ = FigureStyle::Painted;
     RenderTarget painted_;
     SpriteBatch sprites_;
+    Texture tool_art_;
+    bool have_tool_art_ = false;
     i32 max_texture_size_ = 0;
     u32 draw_calls_ = 0;
 };

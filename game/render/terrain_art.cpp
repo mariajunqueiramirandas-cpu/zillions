@@ -501,12 +501,14 @@ Canvas make_tuft(Rng& rng, int kind) {
 
 // --- sprite families --------------------------------------------------------
 
-// Small gameplay props share the landscape's umber/ash/bone palette. These
-// authored shapes stay reproducible and can later be replaced with paintings.
-Image make_camp_prop(int kind) {
-    Canvas canvas(48, 40);
-    paint_shadow(canvas, 26, 30, 19, 6, 0.32f);
+// Missing-asset fallback only. Normal play loads the image-model PNGs from
+// assets/sprites, using the same dimensions, anchors and padded atlas slots.
+Image make_camp_prop(int kind, i32 width, i32 height) {
+    Canvas canvas(width, height);
+    paint_shadow(canvas, 26.0f*static_cast<float>(width)/48, 30.0f*static_cast<float>(height)/40,
+                 19.0f*static_cast<float>(width)/48, 6.0f*static_cast<float>(height)/40, 0.32f);
     canvas.paint([=](f32 x, f32 y) -> Rgba {
+        x *= 48.0f/static_cast<float>(width); y *= 40.0f/static_cast<float>(height);
         const float grain = (value_noise(x * 0.8f, y * 0.35f, 71) - 0.5f) * 0.12f;
         if (kind == 0) { // forked fallen branch
             const float d = std::min(segment_distance(x,y,9,29,37,17), segment_distance(x,y,24,23,27,12));
@@ -547,7 +549,7 @@ Image make_camp_prop(int kind) {
     return canvas.to_image();
 }
 
-enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed, Boulder };
+enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed, Boulder, Branch, Stump, Rubble, Chest };
 
 struct Family {
     const char* name;  // file name stem: sprites/<name>_<variant>.png
@@ -572,6 +574,10 @@ const Family kFamilies[] = {
     {"pebble", Kind::Pebble, &TerrainArt::pebble, 3, 22, 14, 11.0f, 9.0f},
     {"reed", Kind::Reed, &TerrainArt::reed, 3, 20, 30, 10.0f, 28.0f},
     {"boulder", Kind::Boulder, &TerrainArt::boulder, 4, 46, 44, 23.0f, 31.0f},
+    {"branch", Kind::Branch, &TerrainArt::branch, 2, 32, 20, 16.0f, 10.0f},
+    {"stump", Kind::Stump, &TerrainArt::stump, 1, 32, 28, 16.0f, 21.0f},
+    {"rubble", Kind::Rubble, &TerrainArt::rubble, 1, 32, 20, 16.0f, 12.0f},
+    {"chest", Kind::Chest, &TerrainArt::chest, 4, 48, 40, 24.0f, 27.0f},
 };
 
 struct SpriteItem {
@@ -595,6 +601,10 @@ std::vector<Image> draw_sprites(JobSystem& jobs, const std::vector<SpriteItem>& 
             // Each sprite has its own random stream, so results do not depend on scheduling.
             Rng rng(mix64(seed) + static_cast<u64>(i) * 0x9E3779B97F4A7C15ull);
             const SpriteItem& item = items[static_cast<size_t>(i)];
+            if (item.family->kind >= Kind::Branch) {
+                images[static_cast<size_t>(i)] = make_camp_prop(static_cast<int>(item.family->kind)-static_cast<int>(Kind::Branch),item.family->width,item.family->height);
+                continue;
+            }
             const Canvas canvas = [&]() -> Canvas {
                 switch (item.family->kind) {
                     case Kind::Broadleaf: return make_broadleaf(rng, item.variant);
@@ -608,6 +618,7 @@ std::vector<Image> draw_sprites(JobSystem& jobs, const std::vector<SpriteItem>& 
                     case Kind::Pebble: return make_pebbles(rng);
                     case Kind::Reed: return make_tuft(rng, 2);
                     case Kind::Boulder: return make_boulder(rng);
+                    case Kind::Branch: case Kind::Stump: case Kind::Rubble: case Kind::Chest: break;
                 }
                 return Canvas(1, 1);
             }();
@@ -765,8 +776,6 @@ TerrainArt load_terrain_art(JobSystem& jobs, const char* asset_dir, u32 seed) {
         const Family& family = *items[i].family;
         atlas.add(art.*(family.set), images[i], family.anchor_x, family.anchor_y);
     }
-    SpriteSet* props[] = {&art.branch, &art.stump, &art.rubble, &art.chest};
-    for (int i = 0; i < 4; ++i) atlas.add(*props[i], make_camp_prop(i), 24, 30);
     return art;
 }
 

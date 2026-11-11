@@ -524,8 +524,9 @@ void MapRenderer::build_decor(const TileMap& map) {
         sprite.u0 = d.u0; sprite.v0 = d.v0; sprite.u1 = d.u1; sprite.v1 = d.v1;
         sprite.color = pack_color(object.color.r, object.color.g, object.color.b, object.color.a);
         sprite.anchor = d.anchor_y / d.height;
-        const bool casts = scenery_blocks(object.kind) || object.kind == SceneryKind::Bush;
-        decor_.push_back({object.position, ground_height(object.position), sprite, casts});
+        const bool casts = scenery_blocks(object.kind) || object.kind == SceneryKind::Bush || object.kind == SceneryKind::Stump;
+        decor_.push_back({object.position, ground_height(object.position), sprite, casts,
+                          object.kind==SceneryKind::Chest?set.first:-1,object.facing});
     }
 
     for (i32 view = 0; view < 4; ++view) {
@@ -550,8 +551,17 @@ void MapRenderer::refresh_objects(const TileMap& map) {
     shadows_valid_ = false;
 }
 
-void MapRenderer::draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid) {
-    const auto& d=art_.defs[static_cast<size_t>(art_.chest.first)];
+SpriteInstance MapRenderer::view_sprite(const Decor& decor, i32 rotation) const {
+    SpriteInstance sprite=decor.sprite;
+    if(decor.directional>=0) {
+        const auto& d=art_.defs[static_cast<size_t>(decor.directional+((rotation%4+4)+decor.facing)%4)];
+        sprite.u0=d.u0;sprite.v0=d.v0;sprite.u1=d.u1;sprite.v1=d.v1;
+    }
+    return sprite;
+}
+
+void MapRenderer::draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid, u8 facing) {
+    const auto& d=art_.defs[static_cast<size_t>(art_.chest.first+((camera.rotation%4+4)+facing)%4)];
     const Vec2 projected=camera.project(point,surface_height(point,camera.zoom));
     SpriteInstance s{};
     s.x=projected.x-d.anchor_x;s.y=projected.y-d.anchor_y;s.w=d.width;s.h=d.height;
@@ -758,7 +768,7 @@ void MapRenderer::update_shadows(const IsometricCamera& camera) {
     casters.reserve(decor_.size() / 2);
     for (const Decor& decor : decor_) {
         if (!decor.casts_shadow) continue;
-        const SpriteInstance& sprite = decor.sprite;
+        const SpriteInstance sprite = view_sprite(decor,camera.rotation);
         const f32 height = surface_height(decor.ground, camera.zoom);
         Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
         for (i32 corner = 0; corner < 4; ++corner) {
@@ -920,7 +930,7 @@ void MapRenderer::draw_scenery(const IsometricCamera& camera, f32 depth_begin, f
             const Vec2 rotated = camera.rotate(decor.ground);
             if (rotated.x + rotated.y < depth_begin || rotated.x + rotated.y >= depth_end) continue;
             Vec2 projected = camera.project(decor.ground, decor.height);
-            SpriteInstance sprite = decor.sprite;
+            SpriteInstance sprite = view_sprite(decor,camera.rotation);
             sprite.x += projected.x;
             sprite.y += projected.y;
             const Vec2 screen = (Vec2{sprite.x, sprite.y} - plane.center) * camera.zoom + camera.viewport * 0.5f;

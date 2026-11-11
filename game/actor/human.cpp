@@ -460,25 +460,15 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
     const Vec3 swing = rig.swing;
     const Vec3 sway{swing.x, swing.y, 0.0f};
 
-    // Tool geometry is authored in the same three-dimensional body frame as
-    // the hands. It rotates and shades with the existing painted figure.
+    // The painted tool cutout follows endpoints in the three-dimensional hand
+    // frame and participates in the figure's depth and shadow composition.
     if (m.tool != HumanTool::None) {
         const Vec3 axis = rig.tool_axis, grip = rig.tool_grip;
-        const Vec3 head = grip + axis * 0.57f;
         constexpr u8 tool_group = 25;
-        paint.cone(grip - axis * 0.18f, head, 0.022f, 0.018f, hex(0x8D704B), Mat::Leather, tool_group);
-        const Vec3 side{1,0,0};
-        if (m.tool == HumanTool::Axe) {
-            paint.cone(head-side*0.06f, head+side*0.07f, 0.07f, 0.11f, hex(0x8A857A), Mat::Cloth, tool_group, FigurePartFlag::FlatCaps, 0.45f);
-            paint.cone(head+side*0.07f, head+side*0.15f, 0.11f, 0.065f, hex(0xB0AB98), Mat::Cloth, tool_group, FigurePartFlag::FlatCaps, 0.35f);
-        } else {
-            paint.cone(head-side*0.27f-axis*0.06f, head, 0.009f, 0.065f, hex(0x8A857A), Mat::Cloth, tool_group, 0, 0.5f);
-            paint.cone(head, head+side*0.27f-axis*0.06f, 0.065f, 0.009f, hex(0xB0AB98), Mat::Cloth, tool_group, 0, 0.5f);
-        }
-        for (int k = 0; k < 3; ++k) {
-            const Vec3 band = head - axis * (0.025f + static_cast<float>(k)*0.023f);
-            paint.cone(band-axis*0.007f, band+axis*0.007f, 0.031f, 0.031f, hex(0xB3A07A), Mat::Leather, tool_group, FigurePartFlag::FlatCaps);
-        }
+        // The full painted cutout follows these 3D endpoints. The renderer
+        // samples alpha for silhouette, depth ordering and projected shadow.
+        paint.cone(grip-axis*0.24f,grip+axis*0.72f,0.45f,0.45f,hex(0xFFFFFF),
+                   m.tool==HumanTool::Axe?Mat::ToolAxe:Mat::ToolPickaxe,tool_group);
     }
 
     const Color hem = toned(look.tunic, 0.70f);

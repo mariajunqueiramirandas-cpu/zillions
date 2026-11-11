@@ -13,8 +13,10 @@ public:
     bool open = false;
     bool placing = false;
     int chest = -1;
+    u8 placement_facing = 0;
     Stack hand;
-    void init();
+    void init(const char* asset_dir = nullptr);
+    void reload_art(const char* asset_dir);
     bool close(Survival& game);
     bool blocks_world(Vec2 mouse, Vec2 viewport) const;
     void update(const Input& input, Vec2 viewport, Survival& game);

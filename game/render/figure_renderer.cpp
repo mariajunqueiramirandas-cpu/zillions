@@ -70,6 +70,8 @@ void main() {
 
 const char* kFragment = R"(
 uniform sampler2D uParts;
+uniform sampler2D uToolArtwork;
+uniform bool uHasToolArtwork;
 uniform float uPixel;     // tiles per screen pixel
 uniform vec2 uShadow;     // screen offset of a shadow per tile of height
 uniform vec2 uProjection; // depth and up scales, shared with the CPU projection
@@ -138,6 +140,31 @@ float cone(vec2 p, vec2 a, vec2 b, float ra, float rb, bool flatCaps, out float 
     return d;
 }
 
+vec4 toolSample(vec2 p,vec4 ends,vec4 size,int material) {
+    vec2 line=ends.zw-ends.xy;
+    float len=max(length(line),1e-5);
+    vec2 axis=line/len;
+    float t=dot(p-ends.xy,axis)/len;
+    float u=dot(p-ends.xy,vec2(-axis.y,axis.x))/(2.0*size.x)+0.5;
+    if(t<0.0||t>1.0||u<0.0||u>1.0)return vec4(0.0);
+    return texture(uToolArtwork,vec2((u+float(material-5))*0.5,1.0-t));
+}
+
+float partDistance(vec2 p,vec4 ends,vec4 size,int code,out float t,out vec2 off,out float r) {
+    int material=code&7;
+    if(material>=5&&uHasToolArtwork) {
+        vec2 line=ends.zw-ends.xy;
+        t=clamp(dot(p-ends.xy,line)/max(dot(line,line),1e-10),0.0,1.0);
+        off=p-mix(ends.xy,ends.zw,t);r=0.0;
+        float alpha=toolSample(p,ends,size,material).a;
+        // Fully transparent texels are outside the shape even for the much
+        // softer ground-shadow kernel. A half-pixel distance would shade the
+        // entire transparent canvas as a rectangular shadow.
+        return alpha<0.01?1.0:(0.5-alpha)*uPixel;
+    }
+    return cone(p,ends.xy,ends.zw,size.x,size.y,(code&8)!=0,t,off,r);
+}
+
 // How much of the light another part keeps off the surface point (p, z):
 // two steps along the ray towards the light, asking whether a part stands there.
 float occlusion(vec2 p, float z, int count, float water) {
@@ -151,14 +178,14 @@ float occlusion(vec2 p, float z, int count, float water) {
         bool near2 = nearPart(p2, ends.xy, ends.zw, size.x, size.y, 0.0);
         if (!near1 && !near2) continue;
         vec4 more = texelFetch(uParts, ivec2(i * 4 + 2, vRow), 0);
-        bool flatCaps = (int(more.w + 0.5) & 8) != 0;
+        int code=int(more.w+0.5);
         float t, r;
         vec2 off;
-        if (near1 && cone(p1, ends.xy, ends.zw, size.x, size.y, flatCaps, t, off, r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
+        if (near1 && partDistance(p1,ends,size,code,t,off,r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
             float middle = mix(size.z, size.w, t), bulge = sqrt(max(r * r - dot(off, off), 0.0));
             dark = max(dark, smoothstep(0.004, 0.020, middle + bulge - z1) * step(middle - bulge, z1 + 0.12));
         }
-        if (near2 && cone(p2, ends.xy, ends.zw, size.x, size.y, flatCaps, t, off, r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
+        if (near2 && partDistance(p2,ends,size,code,t,off,r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
             float middle = mix(size.z, size.w, t), bulge = sqrt(max(r * r - dot(off, off), 0.0));
             dark = max(dark, smoothstep(0.004, 0.020, middle + bulge - z2) * step(middle - bulge, z2 + 0.12));
         }
@@ -179,8 +206,13 @@ vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, ou
     int material = code & 7;
     float t, r;
     vec2 off;
-    d = cone(p, ends.xy, ends.zw, size.x, size.y, (code & 8) != 0, t, off, r);
+    d = partDistance(p,ends,size,code,t,off,r);
     group = tint.a;
+    if(material>=5&&uHasToolArtwork) {
+        vec4 artwork=toolSample(p,ends,size,material);
+        rim=0.0;
+        return artwork.rgb/max(artwork.a,1e-5);
+    }
 
     vec2 slope = off / max(r, 1.0e-5) * more.z;
     if (uPainted) slope *= 0.72; // flatter painted forms, less cylindrical lighting
@@ -273,7 +305,7 @@ void main() {
         float t, r;
         vec2 off;
         if (nearPart(p, ends.xy, ends.zw, size.x, size.y, 0.5 * aa)) {
-            float d = cone(p, ends.xy, ends.zw, size.x, size.y, (int(more.w + 0.5) & 8) != 0, t, off, r);
+            float d = partDistance(p,ends,size,int(more.w+0.5),t,off,r);
             float bulge = sqrt(max(r * r - dot(off, off), 0.0));
             if (water > 0.0) d = max(d, water - surfaceHeight(more, t, off, bulge));
             if (d < 0.5 * aa) {
@@ -294,7 +326,9 @@ void main() {
             float ha = max(more.x - water, 0.0), hb = max(more.y - water, 0.0);
             vec2 a = ends.xy + ha * uShadow, b = ends.zw + hb * uShadow;
             if (!nearPart(p, a, b, size.x * 0.85, size.y * 0.85, 0.012 + 0.075 * max(ha, hb))) continue;
-            float d2 = cone(p, a, b, size.x * 0.85, size.y * 0.85, false, t, off, r);
+            int shadowCode=int(more.w+0.5);
+            if((shadowCode&7)<5)shadowCode=shadowCode&(~8);
+            float d2 = partDistance(p,vec4(a,b),vec4(size.xy*0.85,size.zw),shadowCode,t,off,r);
             // The further the shadow falls, the softer its edge.
             float soft = 0.012 + 0.075 * mix(ha, hb, t);
             shadow = max(shadow, 1.0 - smoothstep(-soft, soft, d2));
@@ -372,7 +406,7 @@ FigureRenderer::~FigureRenderer() {
     if (vao_) glDeleteVertexArrays(1, &vao_);
 }
 
-void FigureRenderer::init() {
+void FigureRenderer::init(const char* asset_dir) {
     const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kFragment;
     shader_.compile("figure", kVertex, fragment.c_str());
     shader_.bind();
@@ -384,6 +418,7 @@ void FigureRenderer::init() {
     u_pixel_ = shader_.uniform("uPixel");
     u_painted_ = shader_.uniform("uPainted");
     sprites_.init();
+    reload_art(asset_dir);
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture_size_);
 
     glGenVertexArrays(1, &vao_);
@@ -405,6 +440,28 @@ void FigureRenderer::init() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+}
+
+void FigureRenderer::reload_art(const char* asset_dir) {
+#ifdef ZL_ASSET_DIR
+    if(!asset_dir)asset_dir=ZL_ASSET_DIR;
+#endif
+    Image atlas(256,128);
+    have_tool_art_=true;
+    const char* names[]={"axe","pickaxe"};
+    for(int i=0;i<2;++i) {
+        Image source;
+        const std::string path=std::string(asset_dir?asset_dir:"")+"/tools/"+names[i]+".png";
+        if(!read_png(path.c_str(),source)||source.width!=128||source.height!=128) {
+            ZL_LOG("art: missing or invalid held-tool artwork %s",path.c_str());have_tool_art_=false;continue;
+        }
+        for(int y=0;y<128;++y)for(int x=0;x<128;++x) {
+            Color c=source.at(x,y);const u32 a=c.a;
+            c.r=static_cast<u8>((c.r*a+127)/255);c.g=static_cast<u8>((c.g*a+127)/255);c.b=static_cast<u8>((c.b*a+127)/255);
+            atlas.at(i*128+x,y)=c;
+        }
+    }
+    tool_art_.create(atlas,TextureFilter::Linear,TextureWrap::Clamp);
 }
 
 void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& camera,
@@ -567,6 +624,9 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
 
     shader_.bind();
     glUniform2f(shader_.uniform("uProjection"), ground_scale, up_scale);
+    tool_art_.bind(1);
+    glUniform1i(shader_.uniform("uToolArtwork"),1);
+    glUniform1i(shader_.uniform("uHasToolArtwork"),have_tool_art_);
     glUniform2f(shader_.uniform("uShadow"), shadow.x, shadow.y);
     if (world_camera) {
         const Vec2 light{ShadowView{}.light};

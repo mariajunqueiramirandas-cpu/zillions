@@ -50,7 +50,7 @@ public:
     // Terrain heights are unchanged by harvesting: refresh ids, scenery and
     // shadow casters without regenerating expensive mountain relief.
     void refresh_objects(const TileMap& map);
-    void draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid);
+    void draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid, u8 facing = 0);
     void draw(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_ground(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_scenery(const IsometricCamera& camera, f32 depth_begin, f32 depth_end, const SeeThrough* reveal = nullptr);
@@ -109,7 +109,8 @@ private:
     std::vector<Vec2> visible_chunks_;
 
     SpriteBatch batch_;
-    struct Decor { Vec2 ground; f32 height; SpriteInstance sprite; bool casts_shadow; };
+    struct Decor { Vec2 ground; f32 height; SpriteInstance sprite; bool casts_shadow; i32 directional = -1; u8 facing = 0; };
+    SpriteInstance view_sprite(const Decor& decor, i32 rotation) const;
     std::vector<Decor> decor_;
     std::vector<u32> decor_order_[4];  // stable back-to-front order for each view
     i32 map_width_ = 0, map_height_ = 0;

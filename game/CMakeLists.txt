@@ -32,6 +32,7 @@ if(ZL_BUILD_APP)
     render/map_renderer.cpp
     render/relief.cpp)
   target_link_libraries(zl_render PUBLIC zl_actor zl_art zl_gfx PRIVATE zl_options)
+  target_compile_definitions(zl_render PRIVATE ZL_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
   add_executable(zillions app/main.cpp)
   target_link_libraries(zillions PRIVATE zl_render zl_options)
   # Lets the viewer find the painted art when it is not run from the repository root.

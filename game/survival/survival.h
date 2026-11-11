@@ -68,7 +68,7 @@ public:
     bool start_craft(int recipe, int amount = 1);
     void step(float dt);
     bool can_place_chest(const TileMap& map, Vec2 player, Vec2 point) const;
-    bool place_chest(TileMap& map, Vec2 player, Vec2 point);
+    bool place_chest(TileMap& map, Vec2 player, Vec2 point, u8 facing = 0);
     int chest_at(u32 object) const;
     int active_node() const { return active_node_; }
     float harvest_progress() const;

@@ -1,0 +1,372 @@
+{
+  "model": "image_gen",
+  "date": "2026-11-11",
+  "sprites": [
+    {
+      "path": "sprites/branch_0.png",
+      "size": [
+        32,
+        20
+      ],
+      "anchor": [
+        16,
+        10
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        0,
+        444,
+        444,
+        887
+      ],
+      "content_rect": [
+        52,
+        123,
+        374,
+        316
+      ]
+    },
+    {
+      "path": "sprites/branch_1.png",
+      "size": [
+        32,
+        20
+      ],
+      "anchor": [
+        16,
+        10
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        1330,
+        444,
+        1774,
+        887
+      ],
+      "content_rect": [
+        51,
+        122,
+        396,
+        334
+      ]
+    },
+    {
+      "path": "sprites/stump_0.png",
+      "size": [
+        32,
+        28
+      ],
+      "anchor": [
+        16,
+        21
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        444,
+        444,
+        887,
+        887
+      ],
+      "content_rect": [
+        45,
+        112,
+        395,
+        337
+      ]
+    },
+    {
+      "path": "sprites/rubble_0.png",
+      "size": [
+        32,
+        20
+      ],
+      "anchor": [
+        16,
+        12
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        887,
+        444,
+        1330,
+        887
+      ],
+      "content_rect": [
+        71,
+        150,
+        379,
+        307
+      ]
+    },
+    {
+      "path": "sprites/chest_0.png",
+      "size": [
+        48,
+        40
+      ],
+      "anchor": [
+        24,
+        27
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        0,
+        0,
+        444,
+        444
+      ],
+      "content_rect": [
+        46,
+        121,
+        395,
+        381
+      ]
+    },
+    {
+      "path": "sprites/chest_1.png",
+      "size": [
+        48,
+        40
+      ],
+      "anchor": [
+        24,
+        27
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        887,
+        0,
+        1330,
+        444
+      ],
+      "content_rect": [
+        47,
+        121,
+        399,
+        382
+      ]
+    },
+    {
+      "path": "sprites/chest_2.png",
+      "size": [
+        48,
+        40
+      ],
+      "anchor": [
+        24,
+        27
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        444,
+        0,
+        887,
+        444
+      ],
+      "content_rect": [
+        43,
+        120,
+        394,
+        383
+      ]
+    },
+    {
+      "path": "sprites/chest_3.png",
+      "size": [
+        48,
+        40
+      ],
+      "anchor": [
+        24,
+        27
+      ],
+      "source": "source/survival-world.png",
+      "source_rect": [
+        1330,
+        0,
+        1774,
+        444
+      ],
+      "content_rect": [
+        46,
+        124,
+        399,
+        379
+      ]
+    }
+  ],
+  "icons": [
+    {
+      "path": "icons/wood.png",
+      "size": [
+        32,
+        32
+      ],
+      "source": "source/survival-icons.png",
+      "source_rect": [
+        0,
+        0,
+        444,
+        444
+      ],
+      "content_rect": [
+        15,
+        50,
+        428,
+        404
+      ]
+    },
+    {
+      "path": "icons/stone.png",
+      "size": [
+        32,
+        32
+      ],
+      "source": "source/survival-icons.png",
+      "source_rect": [
+        444,
+        0,
+        887,
+        444
+      ],
+      "content_rect": [
+        15,
+        56,
+        427,
+        389
+      ]
+    },
+    {
+      "path": "icons/fiber.png",
+      "size": [
+        32,
+        32
+      ],
+      "source": "source/survival-icons.png",
+      "source_rect": [
+        887,
+        0,
+        1330,
+        444
+      ],
+      "content_rect": [
+        18,
+        16,
+        436,
+        431
+      ]
+    },
+    {
+      "path": "icons/rope.png",
+      "size": [
+        32,
+        32
+      ],
+      "source": "source/survival-icons.png",
+      "source_rect": [
+        1330,
+        0,
+        1774,
+        444
+      ],
+      "content_rect": [
+        37,
+        83,
+        423,
+        418
+      ]
+    },
+    {
+      "path": "icons/axe.png",
+      "size": [
+        32,
+        32
+      ],
+      "source": "source/survival-icons.png",
+      "source_rect": [
+        0,
+        444,
+        444,
+        887
+      ],
+      "content_rect": [
+        34,
+        17,
+        417,
+        424
+      ]
+    },
+    {
+      "path": "icons/pickaxe.png",
+      "size": [
+        32,
+        32
+      ],
+      "source": "source/survival-icons.png",
+      "source_rect": [
+        444,
+        444,
+        887,
+        887
+      ],
+      "content_rect": [
+        32,
+        23,
+        425,
+        429
+      ]
+    },
+    {
+      "path": "icons/chest.png",
+      "size": [
+        32,
+        32
+      ],
+      "source": "source/survival-icons.png",
+      "source_rect": [
+        887,
+        444,
+        1330,
+        887
+      ],
+      "content_rect": [
+        12,
+        99,
+        436,
+        364
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "path": "tools/axe.png",
+      "size": [
+        128,
+        128
+      ],
+      "source": "source/survival-tools.png",
+      "source_rect": [
+        0,
+        0,
+        887,
+        887
+      ],
+      "shaft_u": 0.5
+    },
+    {
+      "path": "tools/pickaxe.png",
+      "size": [
+        128,
+        128
+      ],
+      "source": "source/survival-tools.png",
+      "source_rect": [
+        887,
+        0,
+        1774,
+        887
+      ],
+      "shaft_u": 0.5
+    }
+  ]
+}

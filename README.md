@@ -31,6 +31,11 @@ Files live in `assets/ground` and `assets/sprites`, and the
 [art showcase](docs/art/showcase.md) has contact sheets at four zoom levels and
 tiled ground proofs. The screenshots on this page are taken with that art.
 
+The gathering system adds eight image-model world sprites (including four chest
+views), seven painted item icons and two held-tool cutouts. Generated masters,
+exact prompts and export metadata are retained in `assets/source` and
+`assets/survival-manifest.json`; see [the survival art notes](docs/survival.md#art-and-animation).
+
 ![Generated ground textures](docs/art/ground-swatches.png)
 
 ## The player's character
@@ -62,7 +67,8 @@ the satchel and **B** opens crafting. Make rope, then a stone axe and pickaxe.
 Those tools unlock trees and larger stone deposits. Depleted objects leave
 nonblocking stumps or rubble; clearing every solid object frees the tile.
 
-Craft a chest, choose **Place chest** in the inventory, and click clear ground
+Craft a chest, choose **Place chest** in the inventory, press **T** to rotate it,
+and click clear ground
 nearby. Open the placed chest nearby and Shift-click stacks to transfer them.
 Right-click splits a stack or places one held item. Esc closes a panel or cancels
 placement. Supplies and world changes last for this session; saving is not yet
@@ -107,6 +113,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 |---|---|
 | hold left mouse | gather the resource near the cursor's ground position, while in reach |
 | I / B | inventory and hand crafting; B switches storage to crafting |
+| T during chest placement | rotate world facing; four generated sprites also follow Q/E camera rotation |
 | left / right click a stack | pick up or place a stack / split or place one item |
 | Shift-click | transfer a stack to/from an open chest; queue up to five crafts |
 | Esc | close panel, cancel chest placement, otherwise quit |

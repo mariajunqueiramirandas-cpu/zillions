@@ -41,8 +41,8 @@ stopping when ingredients run out. Output and ingredient checks are repeated at
 completion: supplies moved away during crafting cannot produce free items or
 lose ingredients. Both tools are equipped when made and cannot be crafted twice.
 
-Choose Place chest, inspect the translucent preview, and left-click nearby clear
-ground. Right-click/Esc cancels. The chest has a solid footprint; it cannot be
+Choose Place chest, inspect the translucent preview, use T to rotate its world
+facing, and left-click nearby clear ground. Right-click/Esc cancels. The chest has a solid footprint; it cannot be
 placed over the character, another obstacle, a ramp or an inaccessible level.
 Click a nearby chest to open storage. Shift-click transfers to the other
 container; right-click with Shift transfers one. Held stacks must be placed or
@@ -50,36 +50,48 @@ returned before closing if there is no room to return them automatically.
 
 ## Art and animation
 
-The tools are procedural three-dimensional shapes in the character's body frame.
-Wooden shafts, stone heads and binding bands are added before the body is
-painted. A shared tool axis supplies both hand grips, and two-bone arm posing
-keeps the limbs attached. The work cycle lifts, strikes and recovers; hand
-gathering has a separate reaching motion. The same renderer handles camera
-rotation, material shading, painted filtering and terrain occlusion. These are
-live posed volumes, with no imported mesh or sprite sheet dependency.
+All new world props, item icons and held tools now use image-model artwork.
+The original procedural art pass has been replaced. Three transparent master
+sheets and their exact prompts are retained in `assets/source/survival-*`:
 
-Existing painted trees, rocks, bushes and ground textures are reused. Four new
-props (fallen branch, stump, rubble, chest) are authored in
-`game/render/terrain_art.cpp`, supersampled and packed into the existing padded
-atlas. Their umber, ash and bone colors follow `docs/art-direction.md`. Icons
-are simple authored silhouettes in `survival_ui.cpp`, with the same materials.
+| Generated assets | Runtime files |
+|---|---|
+| Two fallen branch arrangements, stump, rubble | `assets/sprites/branch_0..1.png`, `stump_0.png`, `rubble_0.png` |
+| Four genuinely distinct views of one chest | `assets/sprites/chest_0..3.png` |
+| Wood, stone, fiber, rope, axe, pickaxe, chest icons | `assets/icons/*.png` |
+| Upright axe and pickaxe cutouts with aligned shafts | `assets/tools/*.png` |
+
+`tools/art/export_survival_assets.py` only slices, aligns and downsamples those
+generated images; it does not synthesize artwork. `assets/survival-manifest.json`
+records source rectangles, output dimensions and anchors. The older landscape
+masters, exporter and manifest are preserved. New props and old scenery share
+the existing padded/mip-safe world atlas. Procedural world props remain only
+as the missing-file fallback; normal play reads the image-model PNGs.
+
+The chest has a world facing, independent of the camera. T cycles S/W/N/E while
+placing it. Its long collision footprint rotates with that facing. The renderer
+selects `(camera quarter-turn + world facing) % 4` for both the placed sprite and
+its shadow caster; the preview uses the same selection. The four source views
+alternate their long-axis diagonal and show the front latch or back hinges as
+appropriate. They are not mirrored copies. All four exports use the same
+48x40 canvas, 34-pixel object width and ground anchor (24,27), preventing size
+or position jumps. Anchors mark the center of each footprint, above the nearest
+bottom corner, so wide props sit against their shadows. Future placeable props
+must follow this four-view convention.
+
+Held tools use the generated alpha cutouts attached to endpoints in the
+character's three-dimensional hand frame. Both shafts share the same centerline
+and grip position. Two-bone arm posing keeps the hands attached as the work
+cycle lifts, strikes and recovers. The figure shader samples actual image alpha
+for silhouette, depth and shadow, so transparent canvas pixels do not become
+solid geometry or rectangular shadows. Existing body animation stays procedural.
 Small chips and floating gains provide strike feedback. Audio is a later pass.
 
-This is the first art pass. Further art should be delivered in small groups:
-
-1. Refine the axe/pickaxe silhouettes and the grip/strike animation against a
-   tree and stone deposit, at normal play zoom and close up.
-2. Paint final camp props and resource icons from those approved shapes. Keep
-   transparent masters, export dimensions and ground anchors together. Props
-   currently use the scenery billboard path; an asymmetric building should use
-   four directional paintings or a dedicated geometry path so rotation reveals
-   the correct face.
-3. Define workbench, storage and basic construction silhouettes before drawing
-   their finished art. Review one representative building in the actual scene
-   before producing variants.
-4. Reuse the rig/material system for future colonists. Give zombie types their
-   own approved silhouettes and movement cycles; choose sprite baking or live
-   rendering from measured horde costs before producing the full animation set.
+Further buildings should begin with an image-model concept and four consistent
+views, reviewed in the scene before producing variants. Colonists can reuse the
+rig; zombie types need distinct silhouettes and animation cycles. Measure the
+cost of live rendering versus sprite baking before producing horde animation
+sets.
 
 For each group, check palette, matching light, transparency, anchors, shadows,
 all four camera angles and readability at 8/16/32/64 pixels per tile. Keep source
@@ -91,7 +103,9 @@ repainting assets. No new third-party assets or licenses are introduced here.
 
 ![Chest storage](screenshots/survival-storage.png)
 
-![Procedural axe and camp props](screenshots/survival-tools.png)
+![Generated axe and camp props](screenshots/survival-tools.png)
+
+![Four chest facings and all generated ground props](screenshots/survival-props.png)
 
 ## Implementation and validation
 
@@ -116,7 +130,9 @@ multi-object tiles, bootstrap supplies across seeds and resolutions, chest
 placement, tool poses and a complete empty-bag-to-stocked-chest simulation.
 The GPU suite clicks actual HUD hit boxes to craft both tools and a chest,
 splits/returns a held stack, transfers supplies and renders props/tools at all
-four camera angles. Existing terrain and figure suites remain applicable.
+four camera angles. It also checks four distinct placed facings, rotated
+colliders, directional previews and transparent tool shadows. Existing terrain
+and figure suites remain applicable.
 
 Set `ZL_SURVIVAL_CAPTURE_DIR=/tmp/survival-review` on the survival GPU command to
 write the review frames. Tool poses can also be inspected independently:

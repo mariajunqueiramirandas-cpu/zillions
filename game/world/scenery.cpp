@@ -121,7 +121,7 @@ void build_colliders(Scenery& scene, const TileMap& map) {
             height = boulder ? 0.85f : 0.70f;
         }
         if (object.kind == SceneryKind::Chest) { radius = 0.33f; half_length = 0.18f; height = 0.65f; }
-        const Vec2 extent{half_length * object.scale, 0};
+        const Vec2 extent=object.facing%2 ? Vec2{0,half_length*object.scale} : Vec2{half_length*object.scale,0};
         const f32 bottom = collision_floor(map, object.position);
         scene.colliders.push_back({object.position - extent, object.position + extent, radius * object.scale,
                                    bottom, bottom + height * object.scale, i});

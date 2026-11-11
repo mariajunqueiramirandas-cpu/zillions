@@ -1,0 +1,19 @@
+New survival artwork generated with the image_gen image model on 2026-11-11.
+
+survival-world.png: transparent 4-column, 2-row master sheet. Four views of one
+wooden coffer in the first row; fallen branches, stump, rubble and a second
+branch arrangement in the second row. Chest source columns are exported in
+0,2,1,3 order to follow the game's clockwise 90-degree camera turns.
+
+survival-icons.png: transparent 4-column, 2-row master sheet. Wood, stone, fiber,
+rope, stone axe, stone pickaxe, chest, spare binding bundle. The first seven
+cells are exported as inventory icons. Models are asked for matte painterly
+medieval survival art with umber/ash/bone values and realistic proportions.
+
+survival-tools.png: two face-on tool cutouts with vertical shafts. Both retain
+the same full square cell when exported, aligning the shaft to the hand rig.
+The renderer uses their actual alpha for silhouette, depth and cast shadow.
+
+Original generated masters and exact prompts are retained unchanged. Export only crops isolated
+cells, aligns transparent canvases and downsamples for runtime use. The
+generated_image originals also remain in /workspace/generated_images.

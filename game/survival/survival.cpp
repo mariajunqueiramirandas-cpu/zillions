@@ -102,7 +102,7 @@ void Survival::reset(TileMap& map) {
     for (size_t j = 0; j < starter.size(); ++j) {
         const int i = starter[j];
         const SceneryKind kind = j % 3 == 0 ? SceneryKind::Branch : (j % 3 == 1 ? SceneryKind::Pebble : SceneryKind::Bush);
-        map.scenery.objects.push_back({kind, hash32(static_cast<u32>(i)), {static_cast<float>(i % map.width) + 0.5f, static_cast<float>(i / map.width) + 0.5f}, 0.85f, {216,207,180,255}, i});
+        map.scenery.objects.push_back({kind, hash32(static_cast<u32>(i)), {static_cast<float>(i % map.width) + 0.5f, static_cast<float>(i / map.width) + 0.5f}, kind==SceneryKind::Branch?0.65f:0.85f, {216,207,180,255}, i});
     }
     for (u32 j = 0; j < map.scenery.objects.size(); ++j) {
         const auto& o = map.scenery.objects[j];
@@ -261,12 +261,13 @@ bool Survival::can_place_chest(const TileMap& map, Vec2 player, Vec2 point) cons
     if(map.scenery.sweep(player,point-player,0.02f,collision_floor(map,player)+0.4f,0.25f,hit))return false;
     return !map.scenery.overlaps(point, 0.62f, collision_floor(map, point), 0.8f);
 }
-bool Survival::place_chest(TileMap& map, Vec2 player, Vec2 point) {
+bool Survival::place_chest(TileMap& map, Vec2 player, Vec2 point, u8 facing) {
     point = {std::floor(point.x) + 0.5f, std::floor(point.y) + 0.5f};
     if (!can_place_chest(map, player, point)) return false;
     bag.remove(Item::Chest, 1);
     const u32 id = static_cast<u32>(map.scenery.objects.size());
     map.scenery.objects.push_back({SceneryKind::Chest, 0, point, 1, {255,255,255,255}, map.index(static_cast<int>(point.x), static_cast<int>(point.y))});
+    map.scenery.objects.back().facing=facing%4;
     chests.push_back({id, Inventory{24}});
     map.flags[static_cast<size_t>(map.scenery.objects.back().tile)] &= static_cast<u8>(~TileFlag::Buildable);
     rebuild_scenery_colliders(map); ++world_revision;

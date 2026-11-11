@@ -1,6 +1,7 @@
 // Run explicitly under Xvfb. Exercises the real HUD hit boxes and graphics,
 // including recipe clicks, split stacks, storage transfers and prop previews.
 #include <cstdlib>
+#include <algorithm>
 #include <filesystem>
 #include <cstdio>
 
@@ -46,6 +47,7 @@ int main() {
         for(int y=110;y<145;++y)for(int x=30;x<370;++x)if(image.at(x,y).r>150)++bright;
         if(hud.open)CHECK(bright>50);
         if(directory)CHECK(write_png((std::filesystem::path(directory)/(std::string(name)+".png")).c_str(),image));
+        return image;
     };
     game.bag.add(Item::Wood,30);game.bag.add(Item::Stone,12);game.bag.add(Item::Fiber,18);
     hud.open=true;
@@ -63,6 +65,13 @@ int main() {
     // Right click splits; closing returns the held stack without loss.
     const int wood=game.bag.count(Item::Wood);click(50,190,true);CHECK(hud.hand.count>0);
     CHECK(hud.close(game));CHECK(game.bag.count(Item::Wood)==wood);
+    hud.placing=true;
+    for(int turn=1;turn<=4;++turn) {
+        Input rotate;rotate.key_pressed[static_cast<int>(Key::T)]=true;
+        hud.update(rotate,camera.viewport,game);
+        CHECK(hud.placement_facing==turn%4);
+    }
+    hud.placing=false;
     Vec2 point;bool placed=false;
     for(int y=-2;y<=2&&!placed;++y)for(int x=-2;x<=2&&!placed;++x) {
         point=player.position()+Vec2{static_cast<float>(x),static_cast<float>(y)};
@@ -82,5 +91,78 @@ int main() {
         capture(("axe-"+std::to_string(rotation*90)).c_str(),HumanTool::Axe,0.42f);
         capture(("pickaxe-"+std::to_string(rotation*90)).c_str(),HumanTool::Pickaxe,0.72f);
     }
+    camera.rotation=0;camera.center=point;camera.center_height=renderer.surface_height(point,camera.zoom);
+    camera.zoom=160;
+    Image facings[4];
+    auto& chest_object=map.scenery.objects[game.chests[0].object];
+    for(int facing=0;facing<4;++facing) {
+        chest_object.facing=static_cast<u8>(facing);rebuild_scenery_colliders(map);renderer.refresh_objects(map);
+        for(const auto& collider:map.scenery.colliders)if(collider.object==game.chests[0].object) {
+            if(facing%2)CHECK(collider.a.x==collider.b.x&&collider.a.y!=collider.b.y);
+            else CHECK(collider.a.y==collider.b.y&&collider.a.x!=collider.b.x);
+        }
+        facings[facing]=capture(("chest-facing-"+std::to_string(facing)).c_str());
+        for(int before=0;before<facing;++before) {
+            int changed=0;
+            for(int y=280;y<390;++y)for(int x=410;x<615;++x) {
+                const auto a=facings[facing].at(x,y),b=facings[before].at(x,y);
+                if(std::abs(int(a.r)-int(b.r))+std::abs(int(a.g)-int(b.g))+std::abs(int(a.b)-int(b.b))>20)++changed;
+            }
+            CHECK(changed>100);
+        }
+        target.bind();renderer.draw(camera,{});renderer.draw_chest_preview(camera,point,true,static_cast<u8>(facing));CHECK(glGetError()==GL_NO_ERROR);
+    }
+    chest_object.facing=0;rebuild_scenery_colliders(map);renderer.refresh_objects(map);
+    for(int rotation=0;rotation<4;++rotation) {
+        camera.rotation=rotation;
+        capture(("chest-camera-"+std::to_string(rotation*90)).c_str());
+    }
+    // A transparent tool canvas must not become a rectangular ground shadow.
+    // Isolate the tool on transparent black; opaque sprite + real shadow cover
+    // a small fraction of the frame, unlike the full-card alpha regression.
+    RenderTarget isolated;isolated.create(256,256);
+    Camera2D tool_camera;tool_camera.viewport={256,256};tool_camera.center={0,-0.6f};tool_camera.zoom=160;
+    for(const auto tool:{HumanTool::Axe,HumanTool::Pickaxe}) {
+        HumanMotion motion;motion.tool=tool;motion.work=1;motion.work_phase=0.42f;
+        Figure figure;build_human(player.look,motion,figure);
+        std::erase_if(figure.parts,[](const FigurePart& part){return part.material<FigureMaterial::ToolAxe;});
+        CHECK(figure.parts.size()==1);
+        FigureDraw item{&figure,{0,0}};
+        isolated.bind();glClearColor(0,0,0,0);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        figures.draw(&item,1,tool_camera);
+        // RenderTarget::read_pixels intentionally flattens screenshot alpha;
+        // read raw RGBA here so this assertion measures actual transparency.
+        Image image(256,256);glReadPixels(0,0,256,256,GL_RGBA,GL_UNSIGNED_BYTE,image.bytes());
+        for(int y=0;y<128;++y)std::swap_ranges(image.pixels.begin()+y*256,image.pixels.begin()+(y+1)*256,image.pixels.begin()+(255-y)*256);
+        int occupied=0;
+        for(const auto c:image.pixels) {
+            occupied+=c.a>8;
+            CHECK(int(c.r)<=int(c.a)+1&&int(c.g)<=int(c.a)+1&&int(c.b)<=int(c.a)+1);
+        }
+        std::printf("tool cutout %d: %d occupied pixels\n",static_cast<int>(tool),occupied);
+        if(directory)CHECK(write_png((std::filesystem::path(directory)/(tool==HumanTool::Axe?"axe-alpha.png":"pickaxe-alpha.png")).c_str(),image));
+        CHECK(occupied>40&&occupied<8192);
+        CHECK(image.at(0,0).a==0&&image.at(255,255).a==0);
+        CHECK(glGetError()==GL_NO_ERROR);
+    }
+    // A clean art-review fixture shows every new world prop beside the actor.
+    const Vec2 anchor=player.position();
+    map.scenery.objects.clear();
+    for(int facing=0;facing<4;++facing) {
+        const float offset=static_cast<float>(facing*2-3);
+        const Vec2 position=anchor+Vec2{offset,-offset};
+        map.scenery.objects.push_back({SceneryKind::Chest,0,position,1,{255,255,255,255},
+            map.index(static_cast<int>(position.x),static_cast<int>(position.y)),true,static_cast<u8>(facing)});
+    }
+    const SceneryKind props[]={SceneryKind::Branch,SceneryKind::Stump,SceneryKind::Rubble,SceneryKind::Branch};
+    for(int i=0;i<4;++i) {
+        const float offset=static_cast<float>(i*2-3);
+        const Vec2 position=anchor+Vec2{offset+1.5f,1.5f-offset};
+        map.scenery.objects.push_back({props[i],static_cast<u32>(i==3?1:0),position,
+            props[i]==SceneryKind::Branch?0.65f:1.0f,{255,255,255,255},map.index(static_cast<int>(position.x),static_cast<int>(position.y))});
+    }
+    rebuild_scenery_colliders(map);renderer.refresh_objects(map);
+    camera.rotation=0;camera.center=anchor;camera.center_height=renderer.surface_height(anchor,96);camera.zoom=96;
+    capture("generated-world-props",HumanTool::Axe,0.42f);
     std::puts("Survival GPU checks: HUD recipes, splitting, storage, previews and four-angle tools passed");
 }

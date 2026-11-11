@@ -20,6 +20,7 @@ struct SceneryObject {
     Color color;
     i32 tile;
     bool active = true;
+    u8 facing = 0; // world orientation in clockwise quarter turns
 };
 
 // A horizontal capsule extruded vertically: round trunks and rounded rock

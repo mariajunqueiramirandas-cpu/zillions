@@ -124,7 +124,9 @@ in `docs/character.md`.
       procedural tools, harvesting poses, camp storage and a gameplay HUD.
       Art sources, screenshots and validation are in `docs/survival.md`.
 - [ ] Save/load of the mutable economy and world state.
-- [ ] Final camp-prop/icon paintings and harvesting audio.
+- [x] Image-model world props, inventory icons and held-tool cutouts; four chest
+      views with placement rotation, matching preview, collision and shadows.
+- [ ] Harvesting audio and further art/animation polish.
 
 - [ ] Buildings, units, the horde and combat. Their art is out of scope until
       the design settles (see `docs/design.md`).

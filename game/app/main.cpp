@@ -106,6 +106,7 @@ void usage() {
         "  --work-phase P       screenshot tool swing phase, 0..1\n"
         "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
         "          hold left mouse near resource bases to gather, I inventory, B crafting,\n"
+        "          T rotate a chest during placement,\n"
         "          Space management mode (border/WASD/right-drag pan, autonomous character),\n"
         "          Q/E rotate 90 degrees, C new look, X hood, 1 the hero's look,\n"
         "          Ctrl+R new map (R in map-only mode), V overlay, G grid,\n"
@@ -617,7 +618,8 @@ int main(int argc, char** argv) {
     log_map(map);
 
     FigureRenderer figures;
-    figures.init();
+    const std::string survival_assets=find_assets(options.assets);
+    figures.init(survival_assets.empty()?nullptr:survival_assets.c_str());
     figures.set_style(options.character_style);
     Scene scene{renderer, figures};
     if (options.character_sheet) return save_character_sheet(scene, map, options) ? 0 : 1;
@@ -706,7 +708,7 @@ int main(int argc, char** argv) {
 
     // --- interactive loop ---
     SurvivalUI hud;
-    hud.init();
+    hud.init(survival_assets.empty()?nullptr:survival_assets.c_str());
     u32 rendered_revision = survival.world_revision;
     float impact_age = 10;
     Vec2 impact_position;
@@ -829,6 +831,8 @@ int main(int argc, char** argv) {
             const std::string assets = find_assets(options.assets);
             const Stopwatch timer;
             renderer.reload_art(jobs, assets.empty() ? nullptr : assets.c_str());
+            figures.reload_art(assets.empty()?nullptr:assets.c_str());
+            hud.reload_art(assets.empty()?nullptr:assets.c_str());
             const TerrainArt& art = renderer.art();
             ZL_LOG("art reloaded: %s ground, %s sprites, ready in %.1f ms", art.painted_ground ? "painted" : "placeholder",
                    art.painted_sprites ? "painted" : "placeholder", timer.millis());
@@ -872,7 +876,7 @@ int main(int argc, char** argv) {
         }
         if (follow && !hud.open && hud.placing) {
             if (in.pressed(MouseButton::Right)) hud.placing = false;
-            else if (in.pressed(MouseButton::Left) && world_input && survival.place_chest(map,player.position(),cursor_world)) hud.placing=false;
+            else if (in.pressed(MouseButton::Left) && world_input && survival.place_chest(map,player.position(),cursor_world,hud.placement_facing)) hud.placing=false;
         } else if (follow && hovered_chest >= 0 && in.pressed(MouseButton::Left)) {
             if (survival.in_reach(map,player.position(),survival.chests[static_cast<size_t>(hovered_chest)].object)) {
                 hud.chest=hovered_chest;hud.open=true;survival.cancel_harvest();
@@ -951,7 +955,7 @@ int main(int argc, char** argv) {
             if (hud.placing && world_hit) {
                 const Vec2 p{std::floor(cursor_world.x)+0.5f,std::floor(cursor_world.y)+0.5f};
                 const bool valid=survival.can_place_chest(map,player.position(),p);
-                renderer.draw_chest_preview(camera,p,valid);
+                renderer.draw_chest_preview(camera,p,valid,hud.placement_facing);
                 hud.marker(camera.world_to_screen(p,renderer.surface_height(p,camera.zoom)),camera.viewport,valid);
             }
             hud.impact(camera.world_to_screen(impact_position,renderer.surface_height(impact_position,camera.zoom)),camera.viewport,impact_item,impact_age);

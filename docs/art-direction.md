@@ -1,7 +1,7 @@
 # Zillions: art direction
 
-The first gathering milestone adds four procedural camp props, inventory icons
-and hand-held tools. Its art sources and production plan are documented in
+The gathering milestone adds image-model camp props, inventory icons and held
+tools, with four directional chest sprites. Its masters, prompts, exporter and production plan are documented in
 [the survival notes](survival.md#art-and-animation). The original painted
 landscape brief below still defines their palette and readability targets.
 

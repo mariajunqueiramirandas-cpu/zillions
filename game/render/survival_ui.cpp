@@ -27,19 +27,39 @@ const unsigned char glyphs[][5] = {
 };
 }
 
-void SurvivalUI::init() {
+void SurvivalUI::init(const char* asset_dir) {
     batch_.init();
-    Image atlas(128, 64);
+    reload_art(asset_dir);
+}
+void SurvivalUI::reload_art(const char* asset_dir) {
+#ifdef ZL_ASSET_DIR
+    if (!asset_dir) asset_dir=ZL_ASSET_DIR;
+#endif
+    Image atlas(256,128);
     atlas.at(127,63) = {255,255,255,255};
     for (size_t g = 0; g < std::strlen(alphabet); ++g)
         for (int x = 0; x < 5; ++x) for (int y = 0; y < 7; ++y)
             if (glyphs[g][x] & (1 << y)) atlas.at(static_cast<int>(g%16)*8+x, static_cast<int>(g/16)*8+y) = {255,255,255,255};
+    const char* names[]={"wood","stone","fiber","rope","axe","pickaxe","chest"};
+    for(int i=0;i<7;++i) {
+        Image icon;
+        const std::string path=std::string(asset_dir?asset_dir:"")+"/icons/"+names[i]+".png";
+        if(!read_png(path.c_str(),icon)||icon.width!=32||icon.height!=32) {
+            ZL_LOG("art: missing or invalid inventory icon %s",path.c_str());
+            continue;
+        }
+        for(int y=0;y<32;++y)for(int x=0;x<32;++x) {
+            Color c=icon.at(x,y);const u32 a=c.a;
+            c.r=static_cast<u8>((c.r*a+127)/255);c.g=static_cast<u8>((c.g*a+127)/255);c.b=static_cast<u8>((c.b*a+127)/255);
+            atlas.at(i*32+x,64+y)=c;
+        }
+    }
     atlas_.create(atlas, TextureFilter::Nearest, TextureWrap::Clamp);
 }
 void SurvivalUI::rect(float x, float y, float w, float h, u32 color) {
     SpriteInstance s{};
     s.x = x*scale_; s.y = y*scale_; s.w = w*scale_; s.h = h*scale_;
-    s.u0 = s.u1 = 65279; s.v0 = s.v1 = 65023; s.color = color;
+    s.u0 = s.u1 = static_cast<u16>(127.5f/256*65535); s.v0 = s.v1 = static_cast<u16>(63.5f/128*65535); s.color = color;
     sprites_.push_back(s);
 }
 void SurvivalUI::text(float x, float y, const std::string& value, u32 color, float size) {
@@ -49,34 +69,21 @@ void SurvivalUI::text(float x, float y, const std::string& value, u32 color, flo
             const size_t g = static_cast<size_t>(found-alphabet);
             SpriteInstance s{};
             s.x = x*scale_; s.y = y*scale_; s.w = 5*size*scale_; s.h = 7*size*scale_;
-            s.u0 = static_cast<u16>((g%16)*8*65535/128); s.v0 = static_cast<u16>((g/16)*8*65535/64);
-            s.u1 = static_cast<u16>(((g%16)*8+5)*65535/128); s.v1 = static_cast<u16>(((g/16)*8+7)*65535/64);
+            s.u0 = static_cast<u16>((g%16)*8*65535/256); s.v0 = static_cast<u16>((g/16)*8*65535/128);
+            s.u1 = static_cast<u16>(((g%16)*8+5)*65535/256); s.v1 = static_cast<u16>(((g/16)*8+7)*65535/128);
             s.color = color; sprites_.push_back(s);
         }
         x += 6*size;
     }
 }
 void SurvivalUI::icon(float x, float y, Item item, float size) {
-    const float unit = size/32;
-    const auto box = [&](float a,float b,float w,float h,u32 c) { rect(x+a*unit,y+b*unit,w*unit,h*unit,c); };
-    const u32 wood = pack_color(155,119,74), pale = pack_color(193,177,137), stone = pack_color(145,143,129), dark = pack_color(74,63,47);
-    if (item == Item::Wood) {
-        for (int i=0;i<3;++i) { const float dy=static_cast<float>(i)*7; box(5,5+dy,23,5,wood); box(5,5+dy,4,5,pale); box(11,8+dy,15,1,dark); }
-    } else if (item == Item::Stone) {
-        box(8,8,16,17,stone); box(4,13,23,10,stone); box(9,8,12,3,pale); box(7,23,18,3,dark); box(20,12,5,11,pack_color(106,104,94));
-    } else if (item == Item::Fiber) {
-        for(int i=0;i<5;++i) for(int j=0;j<17;++j) box(15+(static_cast<float>(i)-2)*static_cast<float>(j)/7,25-static_cast<float>(j),2,2,pack_color(142,147,88));
-        box(10,22,12,3,pale);
-    } else if (item == Item::Rope) {
-        for(int i=0;i<24;++i) {const float a=static_cast<float>(i)*6.28318f/24; box(14+std::cos(a)*9,14+std::sin(a)*8,4,4,wood);}
-        box(21,21,4,8,pale); box(12,5,4,3,pale);
-    } else if (item == Item::Axe || item == Item::Pickaxe) {
-        box(14,7,4,23,wood); box(13,11,6,4,pale);
-        if(item==Item::Axe) {box(9,5,17,9,stone);box(22,3,5,13,pale);}
-        else {box(5,5,24,5,stone);box(3,8,4,5,stone);box(26,8,4,5,pale);}
-    } else if(item==Item::Chest) {
-        box(3,9,27,19,wood);box(3,6,27,6,pale);box(7,6,3,22,dark);box(24,6,3,22,dark);box(15,15,4,5,pale);box(3,24,27,3,dark);
-    }
+    const int index=static_cast<int>(item)-1;
+    if(index<0||index>=7)return;
+    SpriteInstance s{};
+    s.x=x*scale_;s.y=y*scale_;s.w=size*scale_;s.h=size*scale_;
+    s.u0=static_cast<u16>(index*32*65535/256);s.u1=static_cast<u16>((index+1)*32*65535/256);
+    s.v0=static_cast<u16>(64*65535/128);s.v1=static_cast<u16>(96*65535/128);s.color=0xFFFFFFFFu;
+    sprites_.push_back(s);
 }
 bool SurvivalUI::hit(float x,float y,float w,float h) const { return mouse_.x>=x && mouse_.y>=y && mouse_.x<x+w && mouse_.y<y+h; }
 bool SurvivalUI::blocks_world(Vec2 mouse, Vec2 viewport) const {
@@ -94,6 +101,7 @@ bool SurvivalUI::close(Survival& game) {
 void SurvivalUI::update(const Input& input, Vec2 viewport, Survival& game) {
     scale_=std::min(viewport.x/1024,viewport.y/720);
     mouse_=input.mouse/scale_;
+    if(placing&&input.pressed(Key::T))placement_facing=static_cast<u8>((placement_facing+1)%4);
     if(!open) return;
     const bool left=input.pressed(MouseButton::Left), right=input.pressed(MouseButton::Right);
     if(!left && !right) return;
@@ -154,7 +162,8 @@ void SurvivalUI::draw(Vec2 viewport,const Input& input,const Survival& game,cons
     for(int i=0;i<4;++i) {const float x=32+static_cast<float>(i)*132;icon(x,height-103,summary[i],28);text(x+35,height-95,std::to_string(game.bag.count(summary[i])),ink,2);}
     icon(width-270,height-104,Item::Axe,30);text(width-233,height-94,game.axe?"READY":"MISSING",game.axe?gold:muted,1.5f);
     icon(width-140,height-104,Item::Pickaxe,30);text(width-103,height-94,game.pickaxe?"READY":"MISSING",game.pickaxe?gold:muted,1.5f);
-    const std::string status=placing?"PLACE CHEST: left click clear ground nearby / right click cancel":(prompt?prompt:"Gather loose materials, craft tools, then establish a camp.");
+    const char* facing_names[]={"S","W","N","E"};
+    const std::string status=placing?std::string("PLACE CHEST / ")+facing_names[placement_facing%4]+" / T rotate / Left place / Right cancel":(prompt?prompt:"Gather loose materials, craft tools, then establish a camp.");
     text(33,height-62,status.substr(0,102),ink,1.5f);
     if(game.message_time>0) text(33,height-40,game.message.substr(0,102),gold,1.5f);
     if(game.crafting()>=0) {rect(300,height-135,424,12,slot);rect(300,height-135,424*game.craft_progress(),12,gold);text(300,height-153,"CRAFTING "+std::string(item_name(recipes()[static_cast<size_t>(game.crafting())].output))+" x"+std::to_string(game.crafting_left()),ink,1.5f);}
