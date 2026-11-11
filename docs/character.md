@@ -1,10 +1,16 @@
-# The player's character
+# The procedural human fallback
 
-The player can walk one human around a generated map. The character has no
-image, mesh or animation asset to load: `game/actor/human.cpp` builds a posed
-collection of rounded cones. `game/render/figure_renderer.cpp` paints that live
-pose to a small transparent GPU texture, then draws it as a painted sprite.
-This implements exploration and movement; colony interactions and combat are
+The live player is the plague doctor: a skinned glTF model with five authored
+clips and 3D tools. See [the plague doctor notes](plague-doctor.md) for that
+pipeline. This document covers the procedural human that remains in the build
+as the missing-model fallback and as the reference rig for the painted sprite
+path.
+
+`game/actor/human.cpp` builds a posed collection of rounded cones.
+`game/render/figure_renderer.cpp` paints that live pose to a small transparent
+GPU texture, then draws it as a painted sprite. The fallback keeps exploration,
+seeded looks, the hood, the painted/smooth comparison and the character sheet
+working when the GLB cannot be loaded. Colony interactions and combat remain
 future game features.
 
 ![Standing headings, strides and looks](character/poses.png)
@@ -16,14 +22,15 @@ the columns are cropped, shaggy, long, tied back, shaved, bearded, hood up and
 blinking. The sheet is rendered at 128 pixels per tile; close-ups were also
 reviewed at 256.
 
-Painted mode is the default. F6 switches live to smooth procedural rendering
-for comparison, or select `--character-style painted|smooth` at startup.
+Painted mode is the fallback's default. When the fallback is active, F6 switches
+live to smooth procedural rendering for comparison, or select
+`--character-style painted|smooth` at startup.
 
 ![Smooth drawing above, live painted sprites below](character/styles.jpg)
 
 ## Recorded animation demo
 
-![Eight-second player movement and animation recording](character/player-demo.gif)
+![Eight-second fallback movement and animation recording](character/player-demo.gif)
 
 `python3 tools/record_demo.py out/player-demo.gif` records the normal controller
 and renderer, including acceleration, turning, gait changes and camera follow.
@@ -31,6 +38,9 @@ The eight-second script idles, walks east in profile, turns towards the viewer,
 jogs west, sprints north and settles. It simulates at 60 Hz and interpolates
 each requested capture time, so GPU speed does not change the movement or the
 GIF's timing. A shared palette and soft painted rendering preserve the look.
+The committed clip above was captured with the procedural fallback. With the
+model present the same recorder captures the plague doctor; its
+[recorded demo](plague-doctor.md#validation) is in the plague doctor notes.
 
 The GIF's accompanying JSON logs position, heading, gait speed, stride phase,
 torso/arm blends and the projected joints for every captured frame. The
@@ -108,6 +118,10 @@ collision from applying a one-frame impulse to the pose or loose gear.
 
 ## Figure shader and scene ordering
 
+This section describes the procedural fallback's painted sprite path. The live
+plague doctor uses the skinned mesh pass in
+[the plague doctor notes](plague-doctor.md#rendering).
+
 A figure contains at most 128 parts; the hero uses 90. Each part occupies four
 RGBA32F texels: projected endpoints; radii and depths; heights, roundness and
 packed material/flags; colour and surface group. The row is padded to 128
@@ -165,6 +179,13 @@ spawn relocation, map edges and interpolation.
 Arm checks add anatomical bend limits, walking reach, counter-swing, wrist and
 thumb continuity, torso/gear clearance across body builds, smooth gait changes,
 bounded turning and settling after a wall collision.
+
+The model path has its own suites: `zl_model_tests` loads the three GLB files
+and checks accessors, skins, clips, bounds and textures; `zl_plague_tests`
+checks clip selection, crossfades, the right-hand anchor, the measured stride
+speeds and the strike-wrap blend; `zl_model_render_tests` exercises the real
+shader, skinning upload, depth, waterline, tool and marker. See
+[the plague doctor notes](plague-doctor.md#validation).
 
 `zl_figure_render_tests` additionally runs the actual OpenGL shaders and texture
 composition. It checks premultiplied transparency, upright sprites, multiple

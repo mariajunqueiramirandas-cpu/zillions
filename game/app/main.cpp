@@ -14,6 +14,7 @@
 
 #include "actor/human.h"
 #include "actor/player.h"
+#include "actor/plague.h"
 #include "core/clock.h"
 #include "core/jobs.h"
 #include "core/rng.h"
@@ -22,6 +23,7 @@
 #include "platform/window.h"
 #include "render/figure_renderer.h"
 #include "render/map_renderer.h"
+#include "render/model_renderer.h"
 #include "render/survival_ui.h"
 #include "survival/survival.h"
 #include "world/mapgen.h"
@@ -102,7 +104,7 @@ void usage() {
         "  --speed M --phase P  screenshots: its speed in m/s and place in the stride, 0..1\n"
         "  --look N             a different person for every N (default: the hero)\n"
         "  --hood               hood up\n"
-        "  --tool axe|pickaxe   pose a procedural tool for screenshots\n"
+        "  --tool axe|pickaxe   pose a held tool for screenshots\n"
         "  --work-phase P       screenshot tool swing phase, 0..1\n"
         "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
         "          hold left mouse near resource bases to gather, I inventory, B crafting,\n"
@@ -248,11 +250,31 @@ HumanLook make_look(u64 seed, bool hood_up) {
 
 // Interleave the character with scenery at its rotated ground depth. Terrain
 // depth handles cliffs; foreground scenery fades around the projected body.
+// The plague doctor is a real skinned mesh and writes depth; the painted
+// procedural figure is the missing-model fallback.
 struct Scene {
     MapRenderer& map;
     FigureRenderer& figures;
+    ModelRenderer* models = nullptr;
+    PlagueAnimator* animator = nullptr;
+    bool plague = false;
 
-    void draw(const IsometricCamera& camera, const MapDrawOptions& options, const Figure* figure, Vec2 position, f32 extra_marker = 0.0f) {
+    void draw(const IsometricCamera& camera, const MapDrawOptions& options, const Figure* figure, Vec2 position,
+              f32 extra_marker = 0.0f, const PlagueDraw* plague_draw = nullptr) {
+        if (plague && models && animator && plague_draw && animator->current().valid) {
+            const Vec2 rotated = camera.rotate(plague_draw->position);
+            const f32 depth = rotated.x + rotated.y;
+            Vec2 lo{0, 0}, hi{0, 0};
+            const bool reveal_ok = models->reveal_bounds(camera, *plague_draw, lo, hi);
+            const SeeThrough reveal{lo, hi};
+            map.draw_ground(camera, options);
+            map.draw_scenery(camera, -1.0e30f, depth);
+            models->draw(camera, map.shadow_view(), map.depth_scale(), *plague_draw, animator->current());
+            map.draw_scenery(camera, depth, 1.0e30f, reveal_ok ? &reveal : nullptr);
+            models->draw_marker(camera, *plague_draw);
+            if (options.collisions) map.draw_collisions(camera);
+            return;
+        }
         if (!figure || figure->parts.empty()) { map.draw(camera, options); return; }
         const f32 height = map.surface_height(position, camera.zoom);
         const Vec2 standing = camera.project(position, height);
@@ -281,15 +303,24 @@ struct Scene {
     }
 };
 
-bool save_screenshot(Scene& scene, const IsometricCamera& camera, const MapDrawOptions& draw, const Figure* figure, Vec2 position, const char* path) {
+bool save_screenshot(Scene& scene, const IsometricCamera& camera, const MapDrawOptions& draw, const Figure* figure, Vec2 position, const char* path, const PlagueDraw* plague = nullptr) {
     RenderTarget target;
     target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
     target.bind();
-    scene.draw(camera, draw, figure, position);
+    scene.draw(camera, draw, figure, position, 0.0f, plague);
     const Image image = target.read_pixels();
     const bool ok = write_png(path, image);
     ZL_LOG("%s %s (%dx%d)", ok ? "wrote" : "could not write", path, image.width, image.height);
     return ok;
+}
+
+// HumanMotion::speed quickens the procedural stride for isometric
+// foreshortening. The skinned model's feet must follow the actual ground
+// speed, so use the velocity projected on the current heading.
+f32 model_ground_speed(const Player& player) {
+    const f32 heading = player.motion().heading;
+    const Vec2 forward{std::cos(heading), std::sin(heading)};
+    return std::max(dot(player.velocity(), forward), 0.0f) / kTilesPerMetre;
 }
 
 struct DemoStage {
@@ -333,7 +364,7 @@ bool record_player_demo(Scene& scene, const TileMap& map, Player& player, Isomet
              << ",\"width\":" << options.width << ",\"height\":" << options.height << ",\"seed\":" << map.seed
              << ",\"map_size\":" << map.width << ",\"resolution\":" << map.resolution << ",\"zoom\":" << camera.zoom
              << ",\"look\":" << options.look_seed << ",\"hood\":" << (player.look.hood_up ? "true" : "false") << ",\"simulation_hz\":60"
-             << ",\"style\":\"" << (scene.figures.style() == FigureStyle::Painted ? "painted" : "smooth") << "\",\"frames\":[\n";
+             << ",\"style\":\"" << (scene.plague ? "plague" : (scene.figures.style() == FigureStyle::Painted ? "painted" : "smooth")) << "\",\"frames\":[\n";
     Vec2 previous_camera = camera.center;
     RenderTarget target;
     target.create(options.width, options.height);
@@ -347,6 +378,11 @@ bool record_player_demo(Scene& scene, const TileMap& map, Player& player, Isomet
             previous_camera = camera.center;
             const f32 time = static_cast<f32>(tick) / 60.0f;
             player.step(map, demo_stage(static_cast<f32>(time / options.demo_seconds)).input, dt);
+            if (scene.plague && scene.animator) {
+                HumanMotion model_motion = player.motion();
+                model_motion.speed = model_ground_speed(player);
+                scene.animator->update(model_motion, dt);
+            }
             if (follow) camera.center += (player.position() - camera.center) * (1.0f - std::exp(-dt * 9.0f));
             ++tick;
         }
@@ -358,8 +394,16 @@ bool record_player_demo(Scene& scene, const TileMap& map, Player& player, Isomet
         const HumanMotion motion = player.motion_at(alpha);
         const Vec2 position = player.position_at(alpha);
         build_human(player.look, motion, figure);
+        PlagueDraw plague_draw;
+        if (scene.plague) {
+            plague_draw.position = position;
+            plague_draw.ground_height = scene.map.surface_height(position, view.zoom);
+            plague_draw.heading = motion.heading;
+            plague_draw.wade = motion.wade;
+            plague_draw.marker = 0.0f;
+        }
         target.bind();
-        scene.draw(view, draw, &figure, position);
+        scene.draw(view, draw, &figure, position, 0.0f, scene.plague ? &plague_draw : nullptr);
         char filename[32];
         std::snprintf(filename, sizeof(filename), "frame_%05d.png", frame);
         const std::string path = (directory / filename).string();
@@ -529,6 +573,52 @@ void bench_figure(FigureRenderer& renderer, const HumanLook& look, Camera2D came
     }
 }
 
+// Isolate the skinned player model and its tool at gameplay and close-up zoom.
+void bench_model(ModelRenderer& models, PlagueAnimator& animator, const IsometricCamera& view,
+                 const MapRenderer& renderer, const TileMap& map) {
+    RenderTarget target;
+    target.create(static_cast<i32>(view.viewport.x), static_cast<i32>(view.viewport.y));
+    target.bind();
+    glClearColor(0.030f, 0.036f, 0.046f, 1.0f);
+    constexpr int kFrames = 30;
+    PlagueDraw item;
+    item.position = {static_cast<f32>(map.start.x) + 0.5f, static_cast<f32>(map.start.y) + 0.5f};
+    item.heading = kPi * 0.5f;
+    item.tool = HumanTool::Axe;
+    item.show_tool = true;
+    HumanMotion motion;
+    motion.speed = kJogSpeed;
+    motion.phase = 0.3f;
+    motion.tool = HumanTool::Axe;
+    motion.work = 1.0f;
+    motion.work_phase = 0.6f;
+    animator.pose(motion);
+    for (const f32 zoom : {kFollowZoom, kMaxZoom}) {
+        IsometricCamera camera = view;
+        camera.zoom = zoom;
+        camera.center = item.position;
+        camera.center_height = renderer.surface_height(item.position, zoom);
+        item.ground_height = camera.center_height;
+        target.bind();
+        for (int i = 0; i < 3; ++i) {
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            models.draw(camera, nullptr, 1.0f, item, animator.current());
+        }
+        glFinish();
+        const Stopwatch total;
+        f64 submit_ms = 0.0;
+        for (int i = 0; i < kFrames; ++i) {
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            const Stopwatch submit;
+            models.draw(camera, nullptr, 1.0f, item, animator.current());
+            submit_ms += submit.millis();
+            glFinish();
+        }
+        std::printf("  model %3.0f px/tile  %u calls   submit %7.3f ms   frame %7.3f ms\n",
+                    zoom, models.draw_calls(), submit_ms / kFrames, total.millis() / kFrames);
+    }
+}
+
 // Stress test for the unit path that does not exist yet: `count` sprites that
 // all move every frame, written straight into GPU memory by every core. "fill"
 // is the engine's own cost; "frame" adds the draw and waits for the GPU.
@@ -599,8 +689,8 @@ int main(int argc, char** argv) {
     Window window(config);
 
     MapRenderer renderer;
+    const std::string assets = find_assets(options.assets);
     {
-        const std::string assets = find_assets(options.assets);
         if (assets.empty()) ZL_LOG("art: no assets directory found; drawing placeholder art in code");
         const Stopwatch timer;
         renderer.init(jobs, assets.empty() ? nullptr : assets.c_str());
@@ -618,15 +708,29 @@ int main(int argc, char** argv) {
     log_map(map);
 
     FigureRenderer figures;
-    const std::string survival_assets=find_assets(options.assets);
-    figures.init(survival_assets.empty()?nullptr:survival_assets.c_str());
+    figures.init(assets.empty() ? nullptr : assets.c_str());
     figures.set_style(options.character_style);
-    Scene scene{renderer, figures};
+
+    // The plague doctor is the player. The procedural figure stays as the
+    // missing-model fallback, and as the reference sheet for the painted rig.
+    ModelRenderer models;
+    PlagueAnimator animator;
+    bool plague_ready = false;
+    if (options.character) {
+        models.init(assets.empty() ? nullptr : assets.c_str());
+        plague_ready = models.ready() && animator.init(models.model());
+        if (plague_ready) ZL_LOG("the plague doctor is the player");
+        else ZL_LOG("model: plague doctor unavailable; using the procedural character");
+    }
+    Scene scene{renderer, figures, plague_ready ? &models : nullptr, plague_ready ? &animator : nullptr, plague_ready};
     if (options.character_sheet) return save_character_sheet(scene, map, options) ? 0 : 1;
 
     // The player's character, standing at the colony's start.
     Player player;
-    player.look = make_look(options.look_seed, options.hood_up);
+    // The plague doctor's body is authored in the GLB; the seeded looks and
+    // hood belong to the procedural fallback and would otherwise change the
+    // collision body without changing the visible model.
+    player.look = plague_ready ? hero_look() : make_look(options.look_seed, options.hood_up);
     const auto place_player = [&](bool posed) {
         if (!(options.have_player && posed ? player.spawn(map, options.player) : player.spawn(map))) ZL_LOG("the map has no open ground for the character");
         if (posed) {
@@ -643,7 +747,7 @@ int main(int argc, char** argv) {
     Figure figure;
     // Rebuilds the figure for the moment being drawn; null when there is no character.
     const auto pose_figure = [&](f32 alpha) -> const Figure* {
-        if (!options.character) return nullptr;
+        if (!options.character || plague_ready) return nullptr;
         HumanMotion pose = player.motion_at(alpha);
         pose.tool = options.tool;
         pose.work = options.tool == HumanTool::None ? 0.0f : 1.0f;
@@ -697,6 +801,11 @@ int main(int argc, char** argv) {
         }
         figures.set_style(options.character_style);
 
+        if (plague_ready) {
+            std::printf("plague doctor, skinned mesh + axe (pose + upload + shader)\n");
+            bench_model(models, animator, camera, renderer, map);
+        }
+
         std::printf("sprite batch, 1 draw call per frame\n");
         SpriteBatch horde;
         horde.init();
@@ -704,11 +813,30 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (options.screenshot) return save_screenshot(scene, camera, draw, pose_figure(1.0f), player.position(), options.screenshot) ? 0 : 1;
+    if (options.screenshot) {
+        PlagueDraw plague_draw;
+        if (plague_ready) {
+            HumanMotion motion = player.motion();
+            motion.tool = options.tool;
+            motion.work = options.tool == HumanTool::None ? 0.0f : 1.0f;
+            motion.work_phase = options.work_phase;
+            animator.pose(motion);
+            const HumanMotion shown = player.motion_at(1.0f);
+            plague_draw.position = player.position_at(1.0f);
+            plague_draw.ground_height = renderer.surface_height(plague_draw.position, camera.zoom);
+            plague_draw.heading = shown.heading;
+            plague_draw.wade = shown.wade;
+            plague_draw.marker = saturate(1.0f - smoothstep(9.0f, 16.0f, camera.zoom));
+            plague_draw.tool = options.tool;
+            plague_draw.show_tool = options.tool != HumanTool::None;
+        }
+        return save_screenshot(scene, camera, draw, pose_figure(1.0f), player.position(), options.screenshot,
+                               plague_ready ? &plague_draw : nullptr) ? 0 : 1;
+    }
 
     // --- interactive loop ---
     SurvivalUI hud;
-    hud.init(survival_assets.empty()?nullptr:survival_assets.c_str());
+    hud.init(assets.empty() ? nullptr : assets.c_str());
     u32 rendered_revision = survival.world_revision;
     float impact_age = 10;
     Vec2 impact_position;
@@ -822,17 +950,19 @@ int main(int argc, char** argv) {
                     mode_switch.begin_to_character(camera, target_zoom);
                 }
             }
-            if (in.pressed(Key::C)) player.look = make_look(++look_seed, false);
-            if (in.pressed(Key::Num1)) player.look = make_look(look_seed = 0, false);
-            if (in.pressed(Key::X)) player.look.hood_up = !player.look.hood_up;
-            if (in.pressed(Key::F6)) figures.set_style(figures.style() == FigureStyle::Painted ? FigureStyle::Smooth : FigureStyle::Painted);
+            if (!plague_ready) {
+                if (in.pressed(Key::C)) player.look = make_look(++look_seed, false);
+                if (in.pressed(Key::Num1)) player.look = make_look(look_seed = 0, false);
+                if (in.pressed(Key::X)) player.look.hood_up = !player.look.hood_up;
+                if (in.pressed(Key::F6)) figures.set_style(figures.style() == FigureStyle::Painted ? FigureStyle::Smooth : FigureStyle::Painted);
+            }
         }
         if (in.pressed(Key::F5)) {
-            const std::string assets = find_assets(options.assets);
+            const std::string reload_assets = find_assets(options.assets);
             const Stopwatch timer;
-            renderer.reload_art(jobs, assets.empty() ? nullptr : assets.c_str());
-            figures.reload_art(assets.empty()?nullptr:assets.c_str());
-            hud.reload_art(assets.empty()?nullptr:assets.c_str());
+            renderer.reload_art(jobs, reload_assets.empty() ? nullptr : reload_assets.c_str());
+            figures.reload_art(reload_assets.empty()?nullptr:reload_assets.c_str());
+            hud.reload_art(reload_assets.empty()?nullptr:reload_assets.c_str());
             const TerrainArt& art = renderer.art();
             ZL_LOG("art reloaded: %s ground, %s sprites, ready in %.1f ms", art.painted_ground ? "painted" : "placeholder",
                    art.painted_sprites ? "painted" : "placeholder", timer.millis());
@@ -900,6 +1030,24 @@ int main(int argc, char** argv) {
                     impact_age=0;impact_position=map.scenery.objects[node.object].position;impact_item=node.item;
                 }
                 survival.step(step_dt);
+                if (plague_ready) {
+                    HumanMotion m = player.motion();
+                    m.speed = model_ground_speed(player);
+                    if (survival.active_node() >= 0) {
+                        const auto& node = survival.nodes[static_cast<size_t>(survival.active_node())];
+                        const Vec2 direction = map.scenery.objects[node.object].position - player.position();
+                        m.heading = std::atan2(direction.y, direction.x);
+                        m.tool = survival.held_tool == Item::Axe ? HumanTool::Axe
+                               : (survival.held_tool == Item::Pickaxe ? HumanTool::Pickaxe : HumanTool::None);
+                        m.work = 1;
+                        m.work_phase = survival.harvest_progress();
+                    } else {
+                        m.tool = HumanTool::None;
+                        m.work = 0;
+                        m.work_phase = 0;
+                    }
+                    animator.update(m, step_dt);
+                }
             }
         }
         const f32 alpha = static_cast<f32>(sim.alpha());
@@ -942,7 +1090,29 @@ int main(int argc, char** argv) {
         const Figure* posed = pose_figure(alpha);
         const Vec2 standing = player.position_at(alpha);
         const f32 management_ring = !follow ? (1.0f - smoothstep(26.0f, 44.0f, camera.zoom)) * 0.32f : 0.0f;
-        scene.draw(camera, draw, posed, standing, std::max(switch_pulse, management_ring));
+        PlagueDraw plague_draw;
+        if (plague_ready) {
+            const HumanMotion motion = player.motion_at(alpha);
+            const bool gathering = survival.active_node() >= 0;
+            f32 heading = motion.heading;
+            HumanTool tool = HumanTool::None;
+            if (gathering) {
+                const auto& node = survival.nodes[static_cast<size_t>(survival.active_node())];
+                const Vec2 direction = map.scenery.objects[node.object].position - player.position();
+                heading = std::atan2(direction.y, direction.x);
+                tool = survival.held_tool == Item::Axe ? HumanTool::Axe
+                     : (survival.held_tool == Item::Pickaxe ? HumanTool::Pickaxe : HumanTool::None);
+            }
+            plague_draw.position = standing;
+            plague_draw.ground_height = renderer.surface_height(standing, camera.zoom);
+            plague_draw.heading = heading;
+            plague_draw.wade = motion.wade;
+            plague_draw.marker = saturate(std::max(1.0f - smoothstep(9.0f, 16.0f, camera.zoom), std::max(switch_pulse, management_ring)));
+            plague_draw.tool = tool;
+            plague_draw.show_tool = gathering;
+        }
+        scene.draw(camera, draw, posed, standing, std::max(switch_pulse, management_ring),
+                   plague_ready ? &plague_draw : nullptr);
         if (options.character) {
             std::string prompt;
             if (hovered_node>=0) {
@@ -980,7 +1150,7 @@ int main(int argc, char** argv) {
             std::snprintf(title, sizeof(title), "Zillions | seed %llu | %dx%d | %.0f fps | %.2f ms CPU/frame | %u sprites | isometric %d deg | Q/E rotate%s%s",
                           static_cast<unsigned long long>(map.seed), map.width, map.height, frames / title_timer, frame_ms_sum / frames,
                           renderer.sprites_drawn(), camera.rotation * 90,
-                          options.character ? (figures.style() == FigureStyle::Painted ? " | painted sprite" : " | smooth") : "",
+                          options.character ? (plague_ready ? " | plague doctor" : (figures.style() == FigureStyle::Painted ? " | painted sprite" : " | smooth")) : "",
                           options.character && !follow ? " | management mode (Space)" : "");
             window.set_title(title);
             title_timer = 0.0;

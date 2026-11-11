@@ -37,6 +37,65 @@ FetchContent_MakeAvailable(stb)
 add_library(stb INTERFACE)
 target_include_directories(stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 
+# libcurl: the HTTP(S) transport behind the OpenRouter client. The platform TLS
+# backend keeps certificate handling native (Schannel on Windows, the system
+# store elsewhere); everything the game does not need is switched off.
+set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_LIBCURL_DOCS OFF CACHE BOOL "" FORCE)
+set(BUILD_MISC_DOCS OFF CACHE BOOL "" FORCE)
+set(ENABLE_CURL_MANUAL OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBSSH OFF CACHE BOOL "" FORCE)
+set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
+set(USE_WIN32_IDN OFF CACHE BOOL "" FORCE)
+set(USE_APPLE_IDN OFF CACHE BOOL "" FORCE)
+set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
+set(ENABLE_ARES OFF CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_TELNET ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_DICT ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_FILE ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_FTP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_GOPHER ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_IPFS ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_IMAP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_IMAPS ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_MQTT ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_POP3 ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_RTSP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_SMB ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_SMTP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_SMTPS ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_TFTP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_WEBSOCKETS ON CACHE BOOL "" FORCE)
+if(WIN32)
+  set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+elseif(APPLE)
+  set(CURL_USE_SECTRANSP ON CACHE BOOL "" FORCE)
+else()
+  set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)
+endif()
+FetchContent_Declare(curl
+  GIT_REPOSITORY https://github.com/curl/curl.git
+  GIT_TAG curl-8_13_0
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(curl)
+
+# nlohmann/json: request and response documents for the OpenRouter client.
+FetchContent_Declare(nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.11.3
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(nlohmann_json)
+
 add_subdirectory(engine)
 add_subdirectory(game)
 

@@ -31,6 +31,10 @@ the colony.
   colony has to build around, and they keep any screenful of map busy.
 - **Resources on the map:** forests, and stone, iron and gold deposits where
   mountains meet open ground. Richer ores lie further from the colony.
+- **The player is the plague doctor.** A skinned glTF model with Idle, Walking,
+  Running, an overhead hammer swing and a sword slash; the 3D axe and pickaxe
+  hang from its right hand. The procedural human remains as the missing-model
+  fallback. See [the plague doctor notes](plague-doctor.md).
 
 ## Status
 
@@ -38,7 +42,7 @@ the colony.
 |---|---|
 | Engine core and renderer | built |
 | Map generator with height levels | built |
-| Player character: procedural human, gait and terrain movement | built; colony and combat interactions pending |
+| Player character: plague doctor GLB, skeletal animation and 3D tools | built; procedural human remains the missing-model fallback |
 | Gathering, inventory, stone tools, crafting and camp storage | first playable loop built; see [survival notes](survival.md) |
 | Colony: buildings and economy | not started |
 | Horde: units, pathfinding, waves | not started |

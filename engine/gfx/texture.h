@@ -22,6 +22,8 @@ public:
     ~Texture();
     Texture(const Texture&) = delete;
     Texture& operator=(const Texture&) = delete;
+    Texture(Texture&& other) noexcept;
+    Texture& operator=(Texture&& other) noexcept;
 
     // 2D RGBA8 texture. Limit the generated mip chain for padded atlases;
     // -1 keeps the full chain.

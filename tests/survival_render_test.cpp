@@ -59,7 +59,7 @@ void check_grounded_shadows(MapRenderer& renderer,JobSystem& jobs,const char* di
                 if(rotation==0)facings[facing]=shaded;
                 if(directory&&level==0&&facing==0) {
                     renderer.draw_scenery(camera,-1e30f,1e30f);
-                    CHECK(write_png((std::filesystem::path(directory)/("grounded-chest-"+std::to_string(rotation*90)+".png")).c_str(),target.read_pixels()));
+                    CHECK(write_png((std::filesystem::path(directory)/("grounded-chest-"+std::to_string(rotation*90)+".png")).string().c_str(),target.read_pixels()));
                 }
             }
         }
@@ -117,7 +117,7 @@ void capture_tool_strikes(MapRenderer& renderer,FigureRenderer& figures,JobSyste
             renderer.draw_scenery(camera,depth,1e30f,&reveal);
             if(directory) {
                 const auto name=std::string(tool==HumanTool::Axe?"chopping":"mining")+"-"+std::to_string(rotation*90)+"-"+std::to_string(static_cast<int>(phase*100))+".png";
-                CHECK(write_png((std::filesystem::path(directory)/name).c_str(),target.read_pixels()));
+                CHECK(write_png((std::filesystem::path(directory)/name).string().c_str(),target.read_pixels()));
             }
             CHECK(glGetError()==GL_NO_ERROR);
         }
@@ -153,7 +153,7 @@ int main() {
         CHECK(image.at(25,25).r<70);int bright=0;
         for(int y=110;y<145;++y)for(int x=30;x<370;++x)if(image.at(x,y).r>150)++bright;
         if(hud.open)CHECK(bright>50);
-        if(directory)CHECK(write_png((std::filesystem::path(directory)/(std::string(name)+".png")).c_str(),image));
+        if(directory)CHECK(write_png((std::filesystem::path(directory)/(std::string(name)+".png")).string().c_str(),image));
         return image;
     };
     game.bag.add(Item::Wood,30);game.bag.add(Item::Stone,12);game.bag.add(Item::Fiber,18);
@@ -247,7 +247,7 @@ int main() {
             CHECK(int(c.r)<=int(c.a)+1&&int(c.g)<=int(c.a)+1&&int(c.b)<=int(c.a)+1);
         }
         std::printf("tool cutout %d: %d occupied pixels\n",static_cast<int>(tool),occupied);
-        if(directory)CHECK(write_png((std::filesystem::path(directory)/(tool==HumanTool::Axe?"axe-alpha.png":"pickaxe-alpha.png")).c_str(),image));
+        if(directory)CHECK(write_png((std::filesystem::path(directory)/(tool==HumanTool::Axe?"axe-alpha.png":"pickaxe-alpha.png")).string().c_str(),image));
         CHECK(occupied>40&&occupied<8192);
         CHECK(image.at(0,0).a==0&&image.at(255,255).a==0);
         CHECK(glGetError()==GL_NO_ERROR);
