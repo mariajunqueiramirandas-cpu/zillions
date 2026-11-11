@@ -133,8 +133,7 @@ FootPose gait_foot(f32 phase, const HumanGait& gait) {
 // Two-bone reach from `hip` to `ankle`, bending towards `bend`. If the ankle
 // is out of reach it is pulled in along the line to the hip, and the returned
 // offset says by how much so the rest of the foot can follow.
-Vec3 solve_leg(Vec3 hip, Vec3& ankle, Vec3 bend, Vec3& knee) {
-    const f32 upper = kThighLength, lower = kShinLength;
+Vec3 solve_leg(Vec3 hip, Vec3& ankle, Vec3 bend, Vec3& knee, f32 upper = kThighLength, f32 lower = kShinLength) {
     Vec3 line = ankle - hip;
     f32 reach = length(line);
     Vec3 shift{0, 0, 0};
@@ -169,6 +168,7 @@ struct Rig {
     Vec3 swing;           // where loose things are thrown, metres in the body frame
     bool blink = false;
     f32 arm_grip = 0.0f;
+    Vec3 tool_grip, tool_axis;
 };
 
 Rig pose(const HumanLook& look, const HumanMotion& m) {
@@ -329,6 +329,29 @@ Rig pose(const HumanLook& look, const HumanMotion& m) {
         rig.thumb_dir[i] = thumbward;
     }
 
+    if (m.tool != HumanTool::None || m.work > 0) {
+        const float pwork = fract(m.work_phase);
+        const float strike=pwork<0.72f?smoothstep(0.12f,0.72f,pwork):1.0f-smoothstep(0.72f,1.0f,pwork);
+        const float impact_angle=m.tool==HumanTool::Pickaxe?2.05f:1.55f;
+        const float swing_angle=lerp(-0.8f,impact_angle,strike);
+        const float angle = lerp(0.35f, swing_angle, saturate(m.work));
+        rig.tool_axis = {0, std::sin(angle), std::cos(angle)};
+        rig.tool_grip = {0.0f,0.23f,lerp(1.32f,m.tool==HumanTool::Pickaxe?1.22f:1.16f,strike*saturate(m.work))};
+        rig.arm_grip = 1;
+        for (int i = 0; i < 2; ++i) {
+            Vec3 target = rig.tool_grip + rig.tool_axis * (i == 0 ? 0.12f : 0.0f);
+            if (m.tool == HumanTool::None) target = {i == 0 ? -0.15f : 0.15f, 0.32f + 0.10f * std::sin(pwork*kTau), 1.04f};
+            target.x += i == 0 ? -0.025f : 0.025f;
+            Vec3 wrist = target;
+            solve_leg(s.shoulder[i], wrist, {i == 0 ? -1.0f : 1.0f, 0.3f, -0.3f}, s.elbow[i], kUpperArmLength, kForearmLength);
+            s.wrist[i] = wrist;
+            rig.fore_dir[i] = normalize(wrist - s.elbow[i]);
+            rig.hand_dir[i] = normalize(target - wrist + rig.tool_axis * 0.04f);
+            rig.thumb_dir[i] = {i == 0 ? 1.0f : -1.0f, 0, 0};
+            s.fingertip[i] = wrist + rig.hand_dir[i] * 0.045f;
+            s.thumb[i] = wrist + rig.hand_dir[i] * 0.02f + rig.thumb_dir[i] * 0.02f;
+        }
+    }
     return rig;
 }
 
@@ -391,7 +414,7 @@ public:
     Painter(Figure& figure, const HumanLook& look, f32 heading)
         : figure_(figure), scale_(kTilesPerMetre * look.height), forward_{std::cos(heading), std::sin(heading)}, right_{-std::sin(heading), std::cos(heading)} {}
 
-    void cone(Vec3 a, Vec3 b, f32 ra, f32 rb, Color color, FigureMaterial material, u8 group, u8 flags = 0, f32 roundness = 1.0f) {
+    void cone(Vec3 a, Vec3 b, f32 ra, f32 rb, Color color, FigureMaterial material, u8 group, u8 flags = 0, f32 roundness = 1.0f, Vec3 image_side = {}) {
         if (figure_.parts.size() >= static_cast<size_t>(kMaxFigureParts)) return;
         FigurePart part;
         part.a = place(a);
@@ -403,6 +426,7 @@ public:
         part.group = group;
         part.flags = static_cast<u8>(flags | (group == kFace ? FigurePartFlag::Unshadowed : 0));
         part.roundness = roundness;
+        part.image_side=place(image_side);
         figure_.parts.push_back(part);
     }
 
@@ -437,6 +461,18 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
     const f32 breath = 1.0f + 0.018f * rig.breath;
     const Vec3 swing = rig.swing;
     const Vec3 sway{swing.x, swing.y, 0.0f};
+
+    // The painted tool cutout follows endpoints in the three-dimensional hand
+    // frame and participates in the figure's depth and shadow composition.
+    if (m.tool != HumanTool::None) {
+        const Vec3 axis = rig.tool_axis, grip = rig.tool_grip;
+        constexpr u8 tool_group = 25;
+        // The full painted cutout follows these 3D endpoints. The renderer
+        // samples alpha for silhouette, depth ordering and projected shadow.
+        const Vec3 cutting_edge{0,axis.z,-axis.y};
+        paint.cone(grip-axis*0.12f,grip+axis*0.72f,0.42f,0.42f,hex(0xFFFFFF),
+                   m.tool==HumanTool::Axe?Mat::ToolAxe:Mat::ToolPickaxe,tool_group,0,1.0f,cutting_edge*0.42f);
+    }
 
     const Color hem = toned(look.tunic, 0.70f);
     const Color strap = toned(look.leather, 0.72f);

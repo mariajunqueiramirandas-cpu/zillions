@@ -35,10 +35,12 @@ struct Input {
     bool key_down[static_cast<int>(Key::Count)] = {};
     bool key_pressed[static_cast<int>(Key::Count)] = {};  // went down this frame
     bool button_down[static_cast<int>(MouseButton::Count)] = {};
+    bool button_pressed[static_cast<int>(MouseButton::Count)] = {};
 
     bool down(Key k) const { return key_down[static_cast<int>(k)]; }
     bool pressed(Key k) const { return key_pressed[static_cast<int>(k)]; }
     bool down(MouseButton b) const { return button_down[static_cast<int>(b)]; }
+    bool pressed(MouseButton b) const { return button_pressed[static_cast<int>(b)]; }
 };
 
 struct WindowConfig {
@@ -75,6 +77,7 @@ private:
     bool mouse_moved_ = false;
     f32 pending_scroll_ = 0.0f;
     bool pending_key_pressed_[static_cast<int>(Key::Count)] = {};
+    bool pending_button_pressed_[static_cast<int>(MouseButton::Count)] = {};
 };
 
 }  // namespace zl

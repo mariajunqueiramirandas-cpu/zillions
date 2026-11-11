@@ -22,6 +22,8 @@
 #include "platform/window.h"
 #include "render/figure_renderer.h"
 #include "render/map_renderer.h"
+#include "render/survival_ui.h"
+#include "survival/survival.h"
 #include "world/mapgen.h"
 
 using namespace zl;
@@ -58,6 +60,8 @@ struct Options {
     HumanMotion pose;                       // its pose in a screenshot
     u64 look_seed = 0;                      // 0: the hero; otherwise a random person
     bool hood_up = false;
+    HumanTool tool = HumanTool::None;
+    f32 work_phase = 0;
 };
 
 // Pixels per tile the camera starts at when it follows the character, the
@@ -98,12 +102,16 @@ void usage() {
         "  --speed M --phase P  screenshots: its speed in m/s and place in the stride, 0..1\n"
         "  --look N             a different person for every N (default: the hero)\n"
         "  --hood               hood up\n"
+        "  --tool axe|pickaxe   pose a procedural tool for screenshots\n"
+        "  --work-phase P       screenshot tool swing phase, 0..1\n"
         "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
+        "          hold left mouse near resource bases to gather, I inventory, B crafting,\n"
+        "          T rotate a chest during placement,\n"
         "          Space management mode (border/WASD/right-drag pan, autonomous character),\n"
         "          Q/E rotate 90 degrees, C new look, X hood, 1 the hero's look,\n"
-        "          R new map, V cycle overlay (height, passability), G grid,\n"
+        "          Ctrl+R new map (R in map-only mode), V overlay, G grid,\n"
         "          F whole map, H centre on character, F2 screenshot, F3 colliders, F5 reload art,\n"
-        "          F6 painted/smooth character, Esc quit");
+        "          F6 painted/smooth character, Esc close panel/cancel placement/quit");
 }
 
 bool parse(int argc, char** argv, Options& o) {
@@ -169,6 +177,13 @@ bool parse(int argc, char** argv, Options& o) {
         else if (is("--phase")) o.pose.phase = static_cast<f32>(std::atof(next()));
         else if (is("--look")) o.look_seed = std::strtoull(next(), nullptr, 10);
         else if (is("--hood")) o.hood_up = true;
+        else if (is("--tool")) {
+            const char* tool = next();
+            if (!std::strcmp(tool,"axe")) o.tool = HumanTool::Axe;
+            else if (!std::strcmp(tool,"pickaxe")) o.tool = HumanTool::Pickaxe;
+            else { usage(); return false; }
+        }
+        else if (is("--work-phase")) o.work_phase = static_cast<float>(std::atof(next()));
         else if (is("--center")) {
             o.center.x = static_cast<f32>(std::atof(next()));
             o.center.y = static_cast<f32>(std::atof(next()));
@@ -603,7 +618,8 @@ int main(int argc, char** argv) {
     log_map(map);
 
     FigureRenderer figures;
-    figures.init();
+    const std::string survival_assets=find_assets(options.assets);
+    figures.init(survival_assets.empty()?nullptr:survival_assets.c_str());
     figures.set_style(options.character_style);
     Scene scene{renderer, figures};
     if (options.character_sheet) return save_character_sheet(scene, map, options) ? 0 : 1;
@@ -621,11 +637,25 @@ int main(int argc, char** argv) {
         }
     };
     place_player(true);
+    Survival survival;
+    const bool interactive = !options.screenshot && !options.bench && !options.record_demo && !options.character_sheet;
+    if (interactive && options.character) { survival.reset(map); renderer.refresh_objects(map); }
     Figure figure;
     // Rebuilds the figure for the moment being drawn; null when there is no character.
     const auto pose_figure = [&](f32 alpha) -> const Figure* {
         if (!options.character) return nullptr;
-        build_human(player.look, player.motion_at(alpha), figure);
+        HumanMotion pose = player.motion_at(alpha);
+        pose.tool = options.tool;
+        pose.work = options.tool == HumanTool::None ? 0.0f : 1.0f;
+        pose.work_phase = options.work_phase;
+        if (survival.active_node() >= 0) {
+            const auto& node = survival.nodes[static_cast<size_t>(survival.active_node())];
+            const Vec2 direction = map.scenery.objects[node.object].position - player.position();
+            pose.heading = std::atan2(direction.y,direction.x);
+            pose.tool = survival.held_tool == Item::Axe ? HumanTool::Axe : (survival.held_tool == Item::Pickaxe ? HumanTool::Pickaxe : HumanTool::None);
+            pose.work = 1; pose.work_phase = survival.harvest_progress();
+        }
+        build_human(player.look, pose, figure);
         return &figure;
     };
     // The camera looks at the character's middle rather than its feet.
@@ -677,6 +707,12 @@ int main(int argc, char** argv) {
     if (options.screenshot) return save_screenshot(scene, camera, draw, pose_figure(1.0f), player.position(), options.screenshot) ? 0 : 1;
 
     // --- interactive loop ---
+    SurvivalUI hud;
+    hud.init(survival_assets.empty()?nullptr:survival_assets.c_str());
+    u32 rendered_revision = survival.world_revision;
+    float impact_age = 10;
+    Vec2 impact_position;
+    Item impact_item = Item::None;
     FixedStep sim(60.0);
     f64 last = now_seconds(), title_timer = 0.0, frame_ms_sum = 0.0;
     int frames = 0, shot_index = 0;
@@ -702,6 +738,7 @@ int main(int argc, char** argv) {
         const f64 now = now_seconds();
         const f64 dt = now - last;
         last = now;
+        impact_age += static_cast<float>(dt);
 
         const IVec2 fb = window.framebuffer_size();
         if (fb.x <= 0 || fb.y <= 0) continue;  // minimised
@@ -709,10 +746,28 @@ int main(int argc, char** argv) {
         const f32 min_zoom = fit_zoom(map, camera.viewport) * 0.7f;
         const f32 max_zoom = options.character ? kMaxZoom : 128.0f;
 
-        if (in.pressed(Key::Escape)) window.request_close();
-        if (in.pressed(Key::R)) {
+        if (in.pressed(Key::Escape)) {
+            if (hud.placing) hud.placing = false;
+            else if (hud.open) hud.close(survival);
+            else window.request_close();
+        }
+        if (options.character && (in.pressed(Key::I) || in.pressed(Key::B))) {
+            survival.cancel_harvest();
+            if (in.pressed(Key::B) && hud.open && hud.chest >= 0) { if (hud.close(survival)) hud.open = true; }
+            else if (hud.open) hud.close(survival);
+            else { hud.open = true; hud.chest = -1; hud.placing = false; }
+        }
+        if (options.character) hud.update(in, camera.viewport, survival);
+        if (hud.placing && !follow) {
+            hud.placing=false;
+            survival.message="Press Space to return to your character before placing a chest";
+            survival.message_time=4;
+        }
+        // Reset is a debug operation once play has a persistent inventory.
+        if (in.pressed(Key::R) && (!options.character || in.down(Key::LeftControl)) && !hud.hand.count) {
             options.map.seed += 1;
             map = generate_map(options.map, jobs);
+            if (options.character) { survival.reset(map); hud.close(survival); hud.placing = false; }
             renderer.set_map(map, jobs);
             log_map(map);
             place_player(false);
@@ -750,7 +805,8 @@ int main(int argc, char** argv) {
             }
         }
         if (options.character) {
-            if (in.pressed(Key::Space)) {
+            if (in.pressed(Key::Space) && !hud.open && !hud.placing) {
+                survival.cancel_harvest();
                 follow = !follow;
                 const Vec2 focus = player_focus(static_cast<f32>(sim.alpha()));
                 if (!follow) {
@@ -775,6 +831,8 @@ int main(int argc, char** argv) {
             const std::string assets = find_assets(options.assets);
             const Stopwatch timer;
             renderer.reload_art(jobs, assets.empty() ? nullptr : assets.c_str());
+            figures.reload_art(assets.empty()?nullptr:assets.c_str());
+            hud.reload_art(assets.empty()?nullptr:assets.c_str());
             const TerrainArt& art = renderer.art();
             ZL_LOG("art reloaded: %s ground, %s sprites, ready in %.1f ms", art.painted_ground ? "painted" : "placeholder",
                    art.painted_sprites ? "painted" : "placeholder", timer.millis());
@@ -791,11 +849,11 @@ int main(int argc, char** argv) {
         if (in.down(Key::S) || in.down(Key::Down)) keys.y += 1.0f;
         PlayerInput input;
         Vec2 pan_delta{0, 0};
-        if (follow) {
+        if (follow && !hud.open) {
             input.move = camera.screen_delta_to_world(keys * camera.zoom);
             input.sprint = in.down(Key::LeftShift);
             input.walk = in.down(Key::LeftControl);
-        } else {
+        } else if (!follow && !hud.open) {
             const bool dragging = in.down(MouseButton::Right) || in.down(MouseButton::Middle);
             const Vec2 border = dragging ? Vec2{0, 0} : edge_pan(in.mouse, camera.viewport, in.mouse_inside, kEdgePanMargin);
             Vec2 pan = keys + border;
@@ -807,18 +865,48 @@ int main(int argc, char** argv) {
             camera.center += pan_delta;
         }
 
+        Vec2 cursor_world;
+        const bool world_hit = renderer.pick(camera, in.mouse, cursor_world);
+        const bool world_input = options.character && follow && in.mouse_inside && world_hit && !hud.blocks_world(in.mouse,camera.viewport);
+        int hovered_node = world_input && !hud.placing ? survival.pick_node(map, cursor_world) : -1;
+        int hovered_chest = -1;
+        if (world_input && !hud.placing) {
+            for (int c = 0; c < static_cast<int>(survival.chests.size()); ++c)
+                if (length(map.scenery.objects[survival.chests[static_cast<size_t>(c)].object].position-cursor_world)<0.8f) hovered_chest=c;
+        }
+        if (follow && !hud.open && hud.placing) {
+            if (in.pressed(MouseButton::Right)) hud.placing = false;
+            else if (in.pressed(MouseButton::Left) && world_input && survival.place_chest(map,player.position(),cursor_world,hud.placement_facing)) hud.placing=false;
+        } else if (follow && hovered_chest >= 0 && in.pressed(MouseButton::Left)) {
+            if (survival.in_reach(map,player.position(),survival.chests[static_cast<size_t>(hovered_chest)].object)) {
+                hud.chest=hovered_chest;hud.open=true;survival.cancel_harvest();
+            } else {survival.message="Move closer to the camp chest";survival.message_time=3;}
+        }
+
         // The simulation ticks at a fixed rate; in management mode the
         // character wanders the local area autonomously.
         const int steps = sim.advance(dt);
         if (options.character) {
             const f32 step_dt = static_cast<f32>(sim.step_seconds());
             for (int k = 0; k < steps; ++k) {
-                const PlayerInput step_input = follow ? input : autonomy.step(map, player, step_dt);
+                const PlayerInput step_input = hud.open ? PlayerInput{} : (follow ? input : autonomy.step(map, player, step_dt));
                 player.step(map, step_input, step_dt);
+                const int remaining = hovered_node >= 0 ? survival.nodes[static_cast<size_t>(hovered_node)].remaining : 0;
+                survival.harvest(map, player.position(), hovered_node,
+                    follow && !hud.open && !hud.placing && in.down(MouseButton::Left),
+                    length(step_input.move)>0 || length(player.velocity())>0.1f, step_dt);
+                if (hovered_node >= 0 && survival.nodes[static_cast<size_t>(hovered_node)].remaining < remaining) {
+                    const auto& node=survival.nodes[static_cast<size_t>(hovered_node)];
+                    impact_age=0;impact_position=map.scenery.objects[node.object].position;impact_item=node.item;
+                }
+                survival.step(step_dt);
             }
         }
         const f32 alpha = static_cast<f32>(sim.alpha());
         draw.time = static_cast<f32>(now);
+        if (survival.world_revision != rendered_revision) {
+            renderer.refresh_objects(map); rendered_revision=survival.world_revision;
+        }
 
         // The wheel zooms about the cursor in management mode, or about the
         // character while following.
@@ -855,12 +943,33 @@ int main(int argc, char** argv) {
         const Vec2 standing = player.position_at(alpha);
         const f32 management_ring = !follow ? (1.0f - smoothstep(26.0f, 44.0f, camera.zoom)) * 0.32f : 0.0f;
         scene.draw(camera, draw, posed, standing, std::max(switch_pulse, management_ring));
+        if (options.character) {
+            std::string prompt;
+            if (hovered_node>=0) {
+                const auto& node=survival.nodes[static_cast<size_t>(hovered_node)];
+                const char* problem=survival.harvest_problem(map,player.position(),hovered_node);
+                prompt=std::string(item_name(node.item))+" / "+std::to_string(node.remaining)+" left / "+(problem?problem:"Hold left mouse to gather");
+                const Vec2 p=map.scenery.objects[node.object].position;
+                hud.marker(camera.world_to_screen(p,renderer.surface_height(p,camera.zoom)),camera.viewport,!problem,survival.harvest_progress());
+            } else if (hovered_chest>=0) prompt="CAMP CHEST / Click nearby to open storage";
+            if (hud.placing && world_hit) {
+                const Vec2 p{std::floor(cursor_world.x)+0.5f,std::floor(cursor_world.y)+0.5f};
+                const bool valid=survival.can_place_chest(map,player.position(),p);
+                renderer.draw_chest_preview(camera,p,valid,hud.placement_facing);
+                hud.marker(camera.world_to_screen(p,renderer.surface_height(p,camera.zoom)),camera.viewport,valid);
+            }
+            hud.impact(camera.world_to_screen(impact_position,renderer.surface_height(impact_position,camera.zoom)),camera.viewport,impact_item,impact_age);
+            hud.draw(camera.viewport,in,survival,prompt.empty()?nullptr:prompt.c_str(),follow);
+        }
         frame_ms_sum += frame_timer.millis();
         ++frames;
 
         if (in.pressed(Key::F2)) {
             const std::string path = "zillions_" + std::to_string(map.seed) + "_" + std::to_string(shot_index++) + ".png";
-            save_screenshot(scene, camera, draw, posed, standing, path.c_str());
+            Image capture(fb.x,fb.y);
+            glReadPixels(0,0,fb.x,fb.y,GL_RGBA,GL_UNSIGNED_BYTE,capture.bytes());
+            for(int y=0;y<fb.y/2;++y) for(int x=0;x<fb.x;++x) std::swap(capture.at(x,y),capture.at(x,fb.y-1-y));
+            if(write_png(path.c_str(),capture)) ZL_LOG("wrote %s",path.c_str());
         }
 
         window.swap_buffers();

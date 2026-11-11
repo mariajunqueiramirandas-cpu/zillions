@@ -44,6 +44,7 @@ struct TerrainArt {
     SpriteSet broadleaf, conifer, bush;
     SpriteSet stone, iron, gold;
     SpriteSet tuft, flower, pebble, reed, boulder;
+    SpriteSet branch, stump, rubble, chest;
 
     // Whether each group was read from files or drawn in code.
     bool painted_ground = false;

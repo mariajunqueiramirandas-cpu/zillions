@@ -67,7 +67,7 @@ bool capsule_hit(Vec2 from, Vec2 delta, Vec2 a, Vec2 b, f32 radius, f32& time, V
 bool scenery_blocks(SceneryKind kind) {
     return kind == SceneryKind::Broadleaf || kind == SceneryKind::Conifer ||
            kind == SceneryKind::Boulder || kind == SceneryKind::Stone ||
-           kind == SceneryKind::Iron || kind == SceneryKind::Gold;
+           kind == SceneryKind::Iron || kind == SceneryKind::Gold || kind == SceneryKind::Chest;
 }
 
 f32 collision_floor(const TileMap& map, Vec2 position) {
@@ -103,6 +103,33 @@ f32 collision_floor(const TileMap& map, Vec2 position) {
     }
     return level * kTerrainLevelHeight * static_cast<f32>(map.resolution);
 }
+
+namespace {
+void build_colliders(Scenery& scene, const TileMap& map) {
+    scene.colliders.clear();
+    for (u32 i = 0; i < static_cast<u32>(scene.objects.size()); ++i) {
+        const SceneryObject& object = scene.objects[i];
+        if (!object.active || !scenery_blocks(object.kind)) continue;
+        const bool tree = object.kind == SceneryKind::Broadleaf || object.kind == SceneryKind::Conifer;
+        f32 radius = object.kind == SceneryKind::Conifer ? 0.12f : 0.15f;
+        f32 half_length = 0.0f, height = object.kind == SceneryKind::Conifer ? 2.5f : 2.3f;
+        if (!tree) {
+            const bool boulder = object.kind == SceneryKind::Boulder;
+            const u32 variant = object.variant % (boulder ? 4u : 3u);
+            radius = (boulder ? 0.35f : 0.32f) + 0.02f * static_cast<f32>(variant % 2);
+            half_length = (boulder && variant >= 2) ? 0.24f : 0.18f;
+            height = boulder ? 0.85f : 0.70f;
+        }
+        if (object.kind == SceneryKind::Chest) { radius = 0.33f; half_length = 0.18f; height = 0.65f; }
+        const Vec2 extent=object.facing%2 ? Vec2{0,half_length*object.scale} : Vec2{half_length*object.scale,0};
+        const f32 bottom = collision_floor(map, object.position);
+        scene.colliders.push_back({object.position - extent, object.position + extent, radius * object.scale,
+                                   bottom, bottom + height * object.scale, i});
+    }
+    scene.rebuild_index(map.width, map.height);
+}
+
+} // namespace
 
 Scenery build_scenery(const TileMap& map) {
     Scenery scene;
@@ -188,27 +215,11 @@ Scenery build_scenery(const TileMap& map) {
         }
     }
 
-    for (u32 i = 0; i < static_cast<u32>(scene.objects.size()); ++i) {
-        const SceneryObject& object = scene.objects[i];
-        if (!scenery_blocks(object.kind)) continue;
-        const bool tree = object.kind == SceneryKind::Broadleaf || object.kind == SceneryKind::Conifer;
-        f32 radius = object.kind == SceneryKind::Conifer ? 0.12f : 0.15f;
-        f32 half_length = 0.0f, height = object.kind == SceneryKind::Conifer ? 2.5f : 2.3f;
-        if (!tree) {
-            const bool boulder = object.kind == SceneryKind::Boulder;
-            const u32 variant = object.variant % (boulder ? 4u : 3u);
-            radius = (boulder ? 0.35f : 0.32f) + 0.02f * static_cast<f32>(variant % 2);
-            half_length = (boulder && variant >= 2) ? 0.24f : 0.18f;
-            height = boulder ? 0.85f : 0.70f;
-        }
-        const Vec2 extent{half_length * object.scale, 0};
-        const f32 bottom = collision_floor(map, object.position);
-        scene.colliders.push_back({object.position - extent, object.position + extent, radius * object.scale,
-                                   bottom, bottom + height * object.scale, i});
-    }
-    scene.rebuild_index(map.width, map.height);
+    build_colliders(scene, map);
     return scene;
 }
+
+void rebuild_scenery_colliders(TileMap& map) { build_colliders(map.scenery, map); }
 
 void Scenery::cells(Vec2 low, Vec2 high, i32& x0, i32& y0, i32& x1, i32& y1) const {
     x0 = clamp(static_cast<i32>(std::floor(low.x / kCellSize)), 0, columns_ - 1);

@@ -39,6 +39,7 @@ the colony.
 | Engine core and renderer | built |
 | Map generator with height levels | built |
 | Player character: procedural human, gait and terrain movement | built; colony and combat interactions pending |
+| Gathering, inventory, stone tools, crafting and camp storage | first playable loop built; see [survival notes](survival.md) |
 | Colony: buildings and economy | not started |
 | Horde: units, pathfinding, waves | not started |
 | Combat, towers, high-ground effects | not started |

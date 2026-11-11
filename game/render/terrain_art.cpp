@@ -501,7 +501,55 @@ Canvas make_tuft(Rng& rng, int kind) {
 
 // --- sprite families --------------------------------------------------------
 
-enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed, Boulder };
+// Missing-asset fallback only. Normal play loads the image-model PNGs from
+// assets/sprites, using the same dimensions, anchors and padded atlas slots.
+Image make_camp_prop(int kind, i32 width, i32 height) {
+    Canvas canvas(width, height);
+    paint_shadow(canvas, 26.0f*static_cast<float>(width)/48, 30.0f*static_cast<float>(height)/40,
+                 19.0f*static_cast<float>(width)/48, 6.0f*static_cast<float>(height)/40, 0.32f);
+    canvas.paint([=](f32 x, f32 y) -> Rgba {
+        x *= 48.0f/static_cast<float>(width); y *= 40.0f/static_cast<float>(height);
+        const float grain = (value_noise(x * 0.8f, y * 0.35f, 71) - 0.5f) * 0.12f;
+        if (kind == 0) { // forked fallen branch
+            const float d = std::min(segment_distance(x,y,9,29,37,17), segment_distance(x,y,24,23,27,12));
+            if (d > 1.6f) return kClear;
+            const float light = std::sin(x*0.5f+y*0.3f)>0 ? 1.0f : 0.8f;
+            return opaque(scale(rgb(135,106,71), light + grain));
+        }
+        if (kind == 1) { // stump, rough bark and concentric cut end
+            const float dx = (x - 24) / 9, dy = (y - 20) / 4;
+            if (dx*dx + dy*dy < 1) {
+                const float ring = std::sin(std::sqrt(dx*dx+dy*dy)*28);
+                return opaque(scale(rgb(166,142,92), (ring > 0.4f ? 0.78f : 1) + grain));
+            }
+            if (y > 20 && y < 31 && std::fabs(x-24) < 9 + (y-20)*0.25f)
+                return opaque(scale(rgb(106,80,54), (std::sin(x*2) > 0.3f ? 0.65f : 0.95f) + grain));
+            return kClear;
+        }
+        if (kind == 2) { // low exhausted rubble
+            float best = 0;
+            for (int i = 0; i < 5; ++i) {
+                const float cx = 10 + static_cast<float>(i) * 6;
+                const float cy = 27 + static_cast<float>(i%2)*3;
+                const float dx = (x-cx)/5, dy = (y-cy)/3;
+                best = std::max(best, 1-dx*dx-dy*dy);
+            }
+            return best > 0 ? opaque(scale(rgb(138,133,122), 0.65f + best*0.3f + grain)) : kClear;
+        }
+        // Chest: an angled lid and two distinct wooden faces, iron straps.
+        const float lid = (x-24)*0.23f;
+        if (x < 7 || x > 41 || y < 9 + std::fabs(x-24)*0.28f || y > 31 - std::fabs(x-24)*0.20f) return kClear;
+        const bool top = y < 19 + lid;
+        const bool band = std::fabs(x-14) < 1.4f || std::fabs(x-34) < 1.4f;
+        const bool lock = std::fabs(x-24) < 2 && y > 22 && y < 27;
+        if (band || lock) return opaque(rgb(70,68,59));
+        if (std::fabs(y-(19+lid)) < 0.8f || (!top && std::fmod(y-lid,4.5f) < 0.7f)) return opaque(rgb(61,43,31));
+        return opaque(scale(top ? rgb(166,142,92) : (x < 24 ? rgb(120,91,58) : rgb(89,65,45)), 1+grain));
+    });
+    return canvas.to_image();
+}
+
+enum class Kind { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Tuft, Flower, Pebble, Reed, Boulder, Branch, Stump, Rubble, Chest };
 
 struct Family {
     const char* name;  // file name stem: sprites/<name>_<variant>.png
@@ -526,6 +574,10 @@ const Family kFamilies[] = {
     {"pebble", Kind::Pebble, &TerrainArt::pebble, 3, 22, 14, 11.0f, 9.0f},
     {"reed", Kind::Reed, &TerrainArt::reed, 3, 20, 30, 10.0f, 28.0f},
     {"boulder", Kind::Boulder, &TerrainArt::boulder, 4, 46, 44, 23.0f, 31.0f},
+    {"branch", Kind::Branch, &TerrainArt::branch, 2, 32, 20, 16.0f, 10.0f},
+    {"stump", Kind::Stump, &TerrainArt::stump, 1, 32, 28, 16.0f, 21.0f},
+    {"rubble", Kind::Rubble, &TerrainArt::rubble, 1, 32, 20, 16.0f, 12.0f},
+    {"chest", Kind::Chest, &TerrainArt::chest, 4, 48, 40, 24.0f, 22.5f},
 };
 
 struct SpriteItem {
@@ -549,6 +601,10 @@ std::vector<Image> draw_sprites(JobSystem& jobs, const std::vector<SpriteItem>& 
             // Each sprite has its own random stream, so results do not depend on scheduling.
             Rng rng(mix64(seed) + static_cast<u64>(i) * 0x9E3779B97F4A7C15ull);
             const SpriteItem& item = items[static_cast<size_t>(i)];
+            if (item.family->kind >= Kind::Branch) {
+                images[static_cast<size_t>(i)] = make_camp_prop(static_cast<int>(item.family->kind)-static_cast<int>(Kind::Branch),item.family->width,item.family->height);
+                continue;
+            }
             const Canvas canvas = [&]() -> Canvas {
                 switch (item.family->kind) {
                     case Kind::Broadleaf: return make_broadleaf(rng, item.variant);
@@ -562,6 +618,7 @@ std::vector<Image> draw_sprites(JobSystem& jobs, const std::vector<SpriteItem>& 
                     case Kind::Pebble: return make_pebbles(rng);
                     case Kind::Reed: return make_tuft(rng, 2);
                     case Kind::Boulder: return make_boulder(rng);
+                    case Kind::Branch: case Kind::Stump: case Kind::Rubble: case Kind::Chest: break;
                 }
                 return Canvas(1, 1);
             }();

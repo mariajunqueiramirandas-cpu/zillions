@@ -117,7 +117,16 @@ in `docs/character.md`.
       and visual collision impulses. Verify joint continuity and settling.
 - [x] Re-record the demo and add an optional joint overlay for frame reviews.
 
-## Game (not started)
+## Game
+
+- [x] First survival economy: reachable hand-gathering supplies, finite trees
+      and stone nodes, stack inventory, rope/tools/chest recipes, hand-held
+      procedural tools, harvesting poses, camp storage and a gameplay HUD.
+      Art sources, screenshots and validation are in `docs/survival.md`.
+- [ ] Save/load of the mutable economy and world state.
+- [x] Image-model world props, inventory icons and held-tool cutouts; four chest
+      views with placement rotation, matching preview, collision and shadows.
+- [ ] Harvesting audio and further art/animation polish.
 
 - [ ] Buildings, units, the horde and combat. Their art is out of scope until
       the design settles (see `docs/design.md`).

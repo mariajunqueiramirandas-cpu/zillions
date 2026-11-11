@@ -8,6 +8,7 @@ class Shader;
 
 struct ShadowView {
     u32 texture = 0;
+    u32 depth_sampler = 0; // non-comparison sampler for blocker height
     Vec2 origin, size;
     // Horizontal direction towards the sun per unit of vertical rise. The
     // light is fixed in world space, independent of camera quarter turns.
@@ -16,7 +17,8 @@ struct ShadowView {
     f32 softness = 0.12f;
 };
 
-// Binds texture unit 6 and supplies the uniforms in kShadowSamplingGLSL.
+// Binds comparison texture unit 6 and raw depth unit 7, supplying the uniforms
+// in kShadowSamplingGLSL.
 void bind_shadows(const Shader& shader, const ShadowView* view);
 extern const char* kShadowSamplingGLSL;
 }  // namespace zl

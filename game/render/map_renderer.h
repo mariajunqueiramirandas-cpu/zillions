@@ -47,6 +47,10 @@ public:
     // keeps its UVs and the map/camera need not be rebuilt when art changes.
     void reload_art(JobSystem& jobs, const char* asset_dir);
     void set_map(const TileMap& map, JobSystem& jobs);
+    // Terrain heights are unchanged by harvesting: refresh ids, scenery and
+    // shadow casters without regenerating expensive mountain relief.
+    void refresh_objects(const TileMap& map);
+    void draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid, u8 facing = 0);
     void draw(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_ground(const IsometricCamera& camera, const MapDrawOptions& options);
     void draw_scenery(const IsometricCamera& camera, f32 depth_begin, f32 depth_end, const SeeThrough* reveal = nullptr);
@@ -74,12 +78,13 @@ private:
 
     TerrainArt art_;
     Shader terrain_;
-    Shader terrain_depth_, scenery_depth_;
+    Shader terrain_depth_, scenery_depth_, solid_depth_;
     Shader collision_lines_;
     u32 collision_vao_ = 0, collision_buffer_ = 0;
     std::vector<ObjectCollider> collision_geometry_;
     ShadowView shadow_view_;
     u32 shadow_fbo_ = 0, shadow_texture_ = 0, caster_vao_ = 0, caster_buffer_ = 0;
+    u32 solid_vao_ = 0, solid_buffer_ = 0, shadow_depth_sampler_ = 0;
     bool shadows_valid_ = false;
     bool active_shadows_ = true;
     i32 shadow_rotation_ = -1;
@@ -105,7 +110,8 @@ private:
     std::vector<Vec2> visible_chunks_;
 
     SpriteBatch batch_;
-    struct Decor { Vec2 ground; f32 height; SpriteInstance sprite; bool casts_shadow; };
+    struct Decor { Vec2 ground; f32 height; SpriteInstance sprite; bool casts_shadow; i32 directional = -1; u8 facing = 0; SceneryKind kind = SceneryKind::Tuft; f32 scale = 1; };
+    SpriteInstance view_sprite(const Decor& decor, i32 rotation) const;
     std::vector<Decor> decor_;
     std::vector<u32> decor_order_[4];  // stable back-to-front order for each view
     i32 map_width_ = 0, map_height_ = 0;

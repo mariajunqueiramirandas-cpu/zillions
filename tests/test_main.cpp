@@ -253,7 +253,7 @@ bool same_figure(const Figure& a, const Figure& b) {
         if (!near(x.a, y.a) || !near(x.b, y.b) || x.ra != y.ra || x.rb != y.rb ||
             x.color.r != y.color.r || x.color.g != y.color.g || x.color.b != y.color.b ||
             x.color.a != y.color.a || x.material != y.material || x.flags != y.flags ||
-            x.group != y.group || x.roundness != y.roundness) return false;
+            x.group != y.group || x.roundness != y.roundness || !near(x.image_side,y.image_side)) return false;
     }
     return true;
 }
@@ -885,8 +885,9 @@ void check_art_is_well_formed(const TerrainArt& art) {
 
     const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush,   &TerrainArt::stone,
                                             &TerrainArt::iron,      &TerrainArt::gold,    &TerrainArt::tuft,   &TerrainArt::flower,
-                                            &TerrainArt::pebble,    &TerrainArt::reed,    &TerrainArt::boulder};
-    const int counts[] = {6, 4, 3, 3, 3, 3, 4, 4, 3, 3, 4};
+                                            &TerrainArt::pebble,    &TerrainArt::reed,    &TerrainArt::boulder,
+                                            &TerrainArt::branch, &TerrainArt::stump, &TerrainArt::rubble, &TerrainArt::chest};
+    const int counts[] = {6, 4, 3, 3, 3, 3, 4, 4, 3, 3, 4, 2, 1, 1, 4};
     int total = 0;
     for (size_t i = 0; i < std::size(sets); ++i) {
         const SpriteSet& set = art.*sets[i];
@@ -942,10 +943,11 @@ TEST(painted_art_loads_from_files) {
         CHECK(same_pixels(layer(painted, t), source));
     }
 
-    const char* families[] = {"broadleaf", "conifer", "bush", "stone", "iron", "gold", "tuft", "flower", "pebble", "reed", "boulder"};
+    const char* families[] = {"broadleaf", "conifer", "bush", "stone", "iron", "gold", "tuft", "flower", "pebble", "reed", "boulder", "branch", "stump", "rubble", "chest"};
     const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush, &TerrainArt::stone,
                                             &TerrainArt::iron, &TerrainArt::gold, &TerrainArt::tuft, &TerrainArt::flower,
-                                            &TerrainArt::pebble, &TerrainArt::reed, &TerrainArt::boulder};
+                                            &TerrainArt::pebble, &TerrainArt::reed, &TerrainArt::boulder,
+                                            &TerrainArt::branch, &TerrainArt::stump, &TerrainArt::rubble, &TerrainArt::chest};
     for (size_t f = 0; f < std::size(families); ++f) {
         const SpriteSet& set = painted.*sets[f];
         for (int v = 0; v < set.count; ++v) {
@@ -996,6 +998,28 @@ TEST(art_falls_back_to_placeholders_without_files) {
     const TerrainArt drawn = build_terrain_art(single);
     CHECK(same_pixels(fallback.sprites, drawn.sprites));
     for (size_t i = 0; i < drawn.ground.size(); ++i) CHECK(same_pixels(fallback.ground[i], drawn.ground[i]));
+}
+
+TEST(survival_generated_art_has_four_distinct_chest_views_and_aligned_tools) {
+    Image views[4];
+    for(int view=0;view<4;++view) {
+        const auto path=std::string(ZL_ASSET_DIR)+"/sprites/chest_"+std::to_string(view)+".png";
+        CHECK(read_png(path.c_str(),views[view]));
+        CHECK(views[view].width==48&&views[view].height==40);
+        CHECK(views[view].at(0,0).a==0&&views[view].at(47,39).a==0);
+        for(int earlier=0;earlier<view;++earlier)CHECK(!same_pixels(views[view],views[earlier]));
+    }
+    for(const char* name:{"wood","stone","fiber","rope","axe","pickaxe","chest"}) {
+        Image icon;const auto path=std::string(ZL_ASSET_DIR)+"/icons/"+name+".png";
+        CHECK(read_png(path.c_str(),icon));CHECK(icon.width==32&&icon.height==32);
+        CHECK(icon.at(0,0).a==0&&icon.at(31,31).a==0);
+    }
+    for(const char* name:{"axe","pickaxe"}) {
+        Image tool;const auto path=std::string(ZL_ASSET_DIR)+"/tools/"+name+".png";
+        CHECK(read_png(path.c_str(),tool));CHECK(tool.width==128&&tool.height==128);
+        CHECK(tool.at(64,96).a>200); // both shafts share the hand-grip centerline
+        CHECK(tool.at(0,0).a==0&&tool.at(127,127).a==0);
+    }
 }
 
 TEST(incomplete_art_falls_back_by_group_without_partial_replacement) {

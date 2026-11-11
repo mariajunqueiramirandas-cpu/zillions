@@ -17,7 +17,8 @@ target_link_libraries(zl_art PUBLIC zl_world PRIVATE zl_options)
 add_library(zl_actor STATIC
   actor/figure.cpp
   actor/human.cpp
-  actor/player.cpp)
+  actor/player.cpp
+  survival/survival.cpp)
 target_link_libraries(zl_actor PUBLIC zl_world PRIVATE zl_options)
 
 # Headless map generator: previews, statistics and benchmarks without a GPU.
@@ -27,9 +28,11 @@ target_link_libraries(zl_mapgen PRIVATE zl_world zl_options)
 if(ZL_BUILD_APP)
   add_library(zl_render STATIC
     render/figure_renderer.cpp
+    render/survival_ui.cpp
     render/map_renderer.cpp
     render/relief.cpp)
   target_link_libraries(zl_render PUBLIC zl_actor zl_art zl_gfx PRIVATE zl_options)
+  target_compile_definitions(zl_render PRIVATE ZL_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
   add_executable(zillions app/main.cpp)
   target_link_libraries(zillions PRIVATE zl_render zl_options)
   # Lets the viewer find the painted art when it is not run from the repository root.

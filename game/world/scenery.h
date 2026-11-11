@@ -10,7 +10,7 @@
 namespace zl {
 struct TileMap;
 
-enum class SceneryKind : u8 { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Boulder, Tuft, Flower, Pebble, Reed };
+enum class SceneryKind : u8 { Broadleaf, Conifer, Bush, Stone, Iron, Gold, Boulder, Tuft, Flower, Pebble, Reed, Branch, Stump, Rubble, Chest };
 
 struct SceneryObject {
     SceneryKind kind;
@@ -19,6 +19,8 @@ struct SceneryObject {
     f32 scale;
     Color color;
     i32 tile;
+    bool active = true;
+    u8 facing = 0; // world orientation in clockwise quarter turns
 };
 
 // A horizontal capsule extruded vertically: round trunks and rounded rock
@@ -56,9 +58,10 @@ private:
     void cells(Vec2 low, Vec2 high, i32& x0, i32& y0, i32& x1, i32& y1) const;
 };
 
-// Retains the original seeded placement, variants, size and tint. Call after
-// terrain edits, regeneration, harvesting or replacing scenery objects.
+// Retains the original seeded placement, variants, size and tint. Used for
+// generation; runtime harvesting edits existing objects and rebuilds colliders.
 Scenery build_scenery(const TileMap& map);
+void rebuild_scenery_colliders(TileMap& map);
 f32 collision_floor(const TileMap& map, Vec2 position);
 bool scenery_blocks(SceneryKind kind);
 

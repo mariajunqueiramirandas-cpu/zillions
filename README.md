@@ -9,8 +9,9 @@ pour in from the map edges. The terrain is the defence: cliffs, rivers and
 mountains funnel the horde through ramps, fords and passes, and the game is
 about choosing which chokepoints to hold. See [the design notes](docs/design.md).
 
-The engine, map generator and a playable human character are built. The colony,
-economy and horde are still to build.
+The engine, map generator, playable human and first gathering economy are built.
+Gather wood, stone and fiber, craft tools, cut trees, mine stone and establish a
+storage chest. Colony workers, buildings and the horde are still to build.
 
 The world uses a 2:1 isometric view with displaced terrain, raised plateaus,
 sloping ramps, depth-tested scenery, and soft cast shadows from a world-space sun. **Q / E** turn the view by 90° around
@@ -29,6 +30,11 @@ and forty scenery sprites following the [art brief](docs/art-direction.md).
 Files live in `assets/ground` and `assets/sprites`, and the
 [art showcase](docs/art/showcase.md) has contact sheets at four zoom levels and
 tiled ground proofs. The screenshots on this page are taken with that art.
+
+The gathering system adds eight image-model world sprites (including four chest
+views), seven painted item icons and two held-tool cutouts. Generated masters,
+exact prompts and export metadata are retained in `assets/source` and
+`assets/survival-manifest.json`; see [the survival art notes](docs/survival.md#art-and-animation).
 
 ![Generated ground textures](docs/art/ground-swatches.png)
 
@@ -52,6 +58,23 @@ The [character notes](docs/character.md) explain the rig, gait and shader and
 record the visual and performance checks.
 
 ![Recorded player demo: idle, walk, turn, jog, sprint and stop](docs/character/player-demo.gif)
+
+## Gathering and the first camp
+
+Start empty-handed. Hold the left mouse button near the base of fallen
+branches, loose stones or bushes to gather wood, stone and fiber. **I** opens
+the satchel and **B** opens crafting. Make rope, then a stone axe and pickaxe.
+Those tools unlock trees and larger stone deposits. Depleted objects leave
+nonblocking stumps or rubble; clearing every solid object frees the tile.
+
+Craft a chest, choose **Place chest** in the inventory, press **T** to rotate it,
+and click clear ground
+nearby. Open the placed chest nearby and Shift-click stacks to transfer them.
+Right-click splits a stack or places one held item. Esc closes a panel or cancels
+placement. Supplies and world changes last for this session; saving is not yet
+implemented. See [the survival notes](docs/survival.md) for recipes, art and checks.
+
+![Inventory and crafting](docs/screenshots/survival-inventory.png)
 
 ## Building
 
@@ -81,19 +104,26 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
          [--no-character] [--player X Y] [--heading DEG] [--speed M --phase P]
          [--look N] [--hood] [--time SECONDS] [--character-sheet FILE]
          [--character-style painted|smooth]
+         [--tool axe|pickaxe] [--work-phase P]
          [--record-demo DIR --demo-seconds N --demo-fps N]
          [--overlay height|pass] [--grid] [--bench]
 ```
 
 | Input | Action |
 |---|---|
+| hold left mouse | gather the resource near the cursor's ground position, while in reach |
+| I / B | inventory and hand crafting; B switches storage to crafting |
+| T during chest placement | rotate world facing; four generated sprites also follow Q/E camera rotation |
+| left / right click a stack | pick up or place a stack / split or place one item |
+| Shift-click | transfer a stack to/from an open chest; queue up to five crafts |
+| Esc | close panel, cancel chest placement, otherwise quit |
 | Q / E | rotate the world 90° counterclockwise / clockwise |
 | WASD / arrows | move the character (Shift: sprint, Ctrl: stroll); pan in management mode |
 | Space | switch between character-follow mode and management mode (autonomous character + city-builder camera) |
 | window borders / right- or middle-drag | pan in management mode |
 | mouse wheel | zoom about the character while following, or the cursor in management mode |
 | C / X / 1 | new seeded look / toggle hood / restore the hero |
-| R | generate the next seed |
+| Ctrl+R | reset the session with the next seed (R alone in map-only mode) |
 | F / H | frame the whole map (in management mode) / centre on the character (start area with `--no-character`) |
 | G | tile grid |
 | V | cycle debug overlay: height levels, passability |
@@ -195,7 +225,7 @@ simulation can run in tests, tools and (later) a server.
 
 - **Instanced terrain and scenery.** Visible terrain chunks use a height-displaced
   mesh with distance-dependent tessellation; a second draw closes the map edges
-  with rock faces. Scenery uses one instanced draw with 44 bytes per sprite,
+  with rock faces. Scenery uses one instanced draw with 48 bytes per sprite,
   including upright and contact-shadow depth. Quad corners come from `gl_VertexID`.
   With a character, scenery is split before and after its rotated ground depth.
   Painted characters render into a live 64-pixel-per-tile GPU atlas and composite
@@ -207,10 +237,12 @@ simulation can run in tests, tools and (later) a server.
   shadows, and movement use the same isometric camera.
 - **Directional shadows.** A cached 2048² floating-point sun depth map includes
   terrain and alpha-cutout trees, bushes, boulders and deposits, including offscreen
-  casters. Terrain, water and characters receive soft filtered shadows while
+  casters. Chests and stumps use grounded solid shadow volumes. Terrain, water
+  and characters receive filtered shadows with firmer contact edges while
   retaining cool ambient light. Shadow geometry refreshes after camera or art
   changes. A stationary map-only view uses up to three visible draws; refreshing
-  shadows adds two depth draws. `--no-shadows` makes reproducible comparisons.
+  shadows adds two depth draws, plus one for solid props when present.
+  `--no-shadows` makes reproducible comparisons.
 - **Job system.** A persistent thread pool with a blocking `parallel_for`;
   chunks are claimed with a single atomic add.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is

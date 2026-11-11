@@ -50,6 +50,7 @@ HumanLook hero_look();
 HumanLook random_look(u64 seed);
 
 // Everything that changes from one frame to the next.
+enum class HumanTool : u8 { None, Axe, Pickaxe };
 struct HumanMotion {
     f32 heading = kPi * 0.5f;  // radians; 0 faces east, pi/2 south (towards the viewer)
     f32 speed = 0.0f;          // metres per second along the heading, at the body's own scale
@@ -64,6 +65,9 @@ struct HumanMotion {
     // values derive them from speed, for standalone poses and review sheets.
     f32 body_activity = -1.0f;
     f32 body_run = -1.0f;
+    HumanTool tool = HumanTool::None;
+    f32 work = 0.0f;
+    f32 work_phase = 0.0f;
 };
 
 // How the legs move at a given speed.
