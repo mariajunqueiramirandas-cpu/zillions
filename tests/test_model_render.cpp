@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <string>
 
 #include "actor/plague.h"
 #include "gfx/gl.h"
@@ -42,9 +46,50 @@ size_t different(const Image& a, const Image& b) {
     }
     return count;
 }
+void texture_orientation(RenderTarget& target, const IsometricCamera& camera) {
+    // Constant UV (.25,.25), red-top/blue-bottom PNG. A second V flip
+    // samples blue instead of red. Exercise decoding, upload and the shader.
+    const auto root = std::filesystem::temp_directory_path() /
+        ("zl-model-uv-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root / "models");
+    {
+        std::ofstream file(root / "models/plague_character.glb");
+        file << R"({"asset":{"version":"2.0"},
+          "buffers":[{"byteLength":60,"uri":"data:application/octet-stream;base64,mpkZv83MzD0AAAAAAACAPgAAgD6amRk/zczMPQAAAAAAAIA+AACAPgAAAADNzMw/AAAAAAAAgD4AAIA+"}],
+          "bufferViews":[{"buffer":0,"byteLength":60,"byteStride":20}],
+          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+                       {"bufferView":0,"byteOffset":12,"componentType":5126,"count":3,"type":"VEC2"}],
+          "images":[{"uri":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAIElEQVR4nGP8z0AaYCJR/agGogAjAwNpMTEI/TAcNAAAwjACHXGKZsUAAAAASUVORK5CYII="}],
+          "textures":[{"source":0}],
+          "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+          "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}]}],
+          "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})";
+    }
+    ModelRenderer fixture;
+    fixture.init(root.string().c_str());
+    std::filesystem::remove_all(root);
+    CHECK(fixture.ready());
+    PlaguePose pose;
+    pose.valid = true;
+    pose.bones.push_back(Mat4::identity());
+    PlagueDraw item;
+    item.heading = kPi * 0.5f;
+    target.bind();
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    fixture.draw(camera, nullptr, 1.0f, item, pose);
+    const Image image = target.read_pixels();
+    size_t red = 0, blue = 0;
+    for (const Color pixel : image.pixels) {
+        if (int(pixel.r) > int(pixel.b) + 80) ++red;
+        if (int(pixel.b) > int(pixel.r) + 80) ++blue;
+    }
+    CHECK(red > 1000);
+    CHECK(blue == 0);
+}
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     WindowConfig config;
     config.visible = false;
     config.width = config.height = kSize;
@@ -57,6 +102,7 @@ int main() {
         std::printf("model render checks: %d failures (model not loaded)\n", failures);
         return 1;
     }
+    CHECK(models.model()->materials[0].base_color.width == 2048);
     PlagueAnimator animator;
     CHECK(animator.init(models.model()));
     if (!animator.ready()) {
@@ -130,6 +176,45 @@ int main() {
     Vec2 lo, hi;
     CHECK(models.reveal_bounds(camera, item, lo, hi));
     CHECK(hi.x > lo.x && hi.y > lo.y);
+
+    item.marker = 0.0f;
+    item.show_tool = false;
+    const Image bare_hands = render();
+    item.show_tool = true;
+    const Image held_axe = render();
+    CHECK(different(bare_hands, held_axe) > 50);
+
+    // Optional review sheets from the actual shader. Rows sample the action
+    // cycle; columns are the four camera rotations.
+    if (argc == 3 && std::string(argv[1]) == "--captures") {
+        const std::filesystem::path directory(argv[2]);
+        std::filesystem::create_directories(directory);
+        camera.center_height = 0.8f;
+        for (const HumanTool tool : {HumanTool::Axe, HumanTool::Pickaxe}) {
+            Image sheet(kSize * 4, kSize * 4);
+            const f32 phases[] = {0.0f, 0.3f, 0.62f, 0.9f};
+            for (i32 row = 0; row < 4; ++row) {
+                motion = HumanMotion{};
+                motion.tool = tool;
+                motion.work = 1.0f;
+                motion.work_phase = phases[row];
+                animator.pose(motion);
+                item.tool = tool;
+                for (i32 column = 0; column < 4; ++column) {
+                    camera.rotation = column;
+                    const Image frame = render();
+                    CHECK(occupied(frame) > 1000);
+                    for (i32 y = 0; y < kSize; ++y)
+                        for (i32 x = 0; x < kSize; ++x)
+                            sheet.at(column * kSize + x, row * kSize + y) = frame.at(x, y);
+                }
+            }
+            const auto path = directory / (tool == HumanTool::Axe ? "plague-axe-review.png" : "plague-pickaxe-review.png");
+            CHECK(write_png(path.string().c_str(), sheet));
+        }
+        camera.rotation = 0;
+    }
+    texture_orientation(target, camera);
 
     std::printf("model render checks: %d failures\n", failures);
     return failures ? 1 : 0;

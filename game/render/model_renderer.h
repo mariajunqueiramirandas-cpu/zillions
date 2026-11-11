@@ -63,7 +63,7 @@ private:
     };
 
     void load(const char* asset_dir);
-    void upload(const GltfModel& model, std::vector<GpuMesh>& meshes, std::vector<GpuMaterial>& materials, bool tool);
+    void upload(const GltfModel& model, std::vector<GpuMesh>& meshes, std::vector<GpuMaterial>& materials);
     void draw_mesh(const GpuMesh& mesh, const GpuMaterial& material, const Mat4& model_matrix,
                    const Mat4* bones, u32 bone_count, bool skinned, f32 waterline);
     void draw_contact_shadow(const IsometricCamera& camera, f32 depth_scale, const PlagueDraw& item);

@@ -58,10 +58,11 @@ fords slow the character and cover its legs with water.
 
 The player is a skinned glTF model loaded from
 `assets/models/plague_character.glb`. Five authored clips drive it: Idle,
-Walking and Running follow the player's speed, `Heavy_Hammer_Swing` chops with
-the crafted axe or pickaxe, and `Right_Hand_Sword_Slash` is the hand-gathering
-swipe. The 3D tools (`assets/models/axe.glb`, `pickaxe.glb`) hang from the right
-hand and follow the swing. The character is lit by the world sun, receives the
+Walking and Running follow the player's speed, `Right_Hand_Sword_Slash` drives
+one-handed axe woodcutting, and `Heavy_Hammer_Swing` drives the two-handed
+pickaxe. Hand gathering uses a short section of the slash. The 3D tools
+(`assets/models/axe.glb`, `pickaxe.glb`) attach at the palms and follow the
+swing. The character is lit by the world sun, receives the
 cached shadow map, sinks below ford water, casts a soft contact shadow and keeps
 the far-zoom marker. The animation state machine crossfades locomotion, scales
 playback to each clip's measured stride speed and blends across repeated

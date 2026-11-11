@@ -14,11 +14,6 @@ namespace zl {
 
 namespace {
 
-// The tools are authored about 1.9 m long with the handle along +Y and the
-// grip near y=-0.55. The renderer moves that grip to the origin and scales the
-// tool to a believable hand-tool length before upload.
-constexpr f32 kToolGripY = -0.55f;
-constexpr f32 kToolScale = 0.34f;
 constexpr f32 kContactRadius = 0.55f;
 constexpr f32 kMarkerRadius = 0.62f;
 constexpr f32 kMarkerPixels = 13.0f;
@@ -54,9 +49,9 @@ void main() {
     vec4 world = uModel * p;
     vWorld = world.xyz;
     vNormal = mat3(uModel) * n;
-    // glTF UVs start at the image's top-left; the engine uploads rows top to
-    // bottom, so flip V once here.
-    vUV = vec2(aUV.x, 1.0 - aUV.y);
+    // stb decodes the top row first and Texture uploads it at v=0. This
+    // already matches glTF's top-left origin; flipping V scrambles the atlas.
+    vUV = aUV;
     vec2 r = uRotation * world.xy;
     vec2 plane = vec2((r.x - r.y) * 0.7071067812, (r.x + r.y) * 0.3535533906 - world.z * 0.8660254038);
     float depth = -((r.x + r.y) * 0.6123724357 + world.z * 0.5) * uDepthScale;
@@ -212,11 +207,11 @@ void ModelRenderer::load(const char* asset_dir) {
 
     const Stopwatch timer;
     const std::string plague_path = root + "/models/plague_character.glb";
-    if (!plague_.load(plague_path.c_str(), error)) {
+    if (!plague_.load(plague_path.c_str(), error, 2048)) {
         ZL_LOG("model: %s: %s", plague_path.c_str(), error.c_str());
         return;
     }
-    upload(plague_, plague_meshes_, plague_materials_, false);
+    upload(plague_, plague_meshes_, plague_materials_);
     if (plague_meshes_.empty()) {
         ZL_LOG("model: %s has no drawable primitives", plague_path.c_str());
         return;
@@ -224,11 +219,11 @@ void ModelRenderer::load(const char* asset_dir) {
     ready_ = true;
 
     const std::string axe_path = root + "/models/axe.glb";
-    if (axe_.load(axe_path.c_str(), error)) upload(axe_, axe_meshes_, axe_materials_, true);
+    if (axe_.load(axe_path.c_str(), error)) upload(axe_, axe_meshes_, axe_materials_);
     else ZL_LOG("model: %s: %s", axe_path.c_str(), error.c_str());
 
     const std::string pickaxe_path = root + "/models/pickaxe.glb";
-    if (pickaxe_.load(pickaxe_path.c_str(), error)) upload(pickaxe_, pickaxe_meshes_, pickaxe_materials_, true);
+    if (pickaxe_.load(pickaxe_path.c_str(), error)) upload(pickaxe_, pickaxe_meshes_, pickaxe_materials_);
     else ZL_LOG("model: %s: %s", pickaxe_path.c_str(), error.c_str());
 
     ZL_LOG("model: plague doctor %zu verts, axe %zu, pickaxe %zu, loaded in %.1f ms",
@@ -237,7 +232,7 @@ void ModelRenderer::load(const char* asset_dir) {
            pickaxe_.primitives.empty() ? 0 : pickaxe_.primitives[0].vertices.size(), timer.millis());
 }
 
-void ModelRenderer::upload(const GltfModel& model, std::vector<GpuMesh>& meshes, std::vector<GpuMaterial>& materials, bool tool) {
+void ModelRenderer::upload(const GltfModel& model, std::vector<GpuMesh>& meshes, std::vector<GpuMaterial>& materials) {
     materials.clear();
     materials.reserve(std::max<size_t>(model.materials.size(), 1));
     if (model.materials.empty()) {
@@ -263,10 +258,7 @@ void ModelRenderer::upload(const GltfModel& model, std::vector<GpuMesh>& meshes,
         mesh.count = static_cast<u32>(primitive.indices.size());
         mesh.material = primitive.material >= 0 && primitive.material < static_cast<i32>(materials.size()) ? primitive.material : 0;
 
-        std::vector<GltfVertex> vertices = primitive.vertices;
-        if (tool) {
-            for (GltfVertex& vertex : vertices) vertex.position = (vertex.position - Vec3{0, kToolGripY, 0}) * kToolScale;
-        }
+        const std::vector<GltfVertex>& vertices = primitive.vertices;
 
         glGenVertexArrays(1, &mesh.vao);
         glGenBuffers(1, &mesh.vbo);
@@ -341,8 +333,7 @@ void ModelRenderer::draw(const IsometricCamera& camera, const ShadowView* shadow
         const std::vector<GpuMesh>& meshes = item.tool == HumanTool::Axe ? axe_meshes_ : pickaxe_meshes_;
         const std::vector<GpuMaterial>& materials = item.tool == HumanTool::Axe ? axe_materials_ : pickaxe_materials_;
         if (!meshes.empty()) {
-            const Mat4 attach = Mat4::rotation_x(-kPi * 0.5f) * Mat4::rotation_y(item.tool == HumanTool::Axe ? -kPi * 0.5f : 0.0f);
-            const Mat4 tool_model = world * pose.hand * attach;
+            const Mat4 tool_model = world * plague_tool_transform(pose, item.tool);
             for (const GpuMesh& mesh : meshes) {
                 const GpuMaterial& material = materials[static_cast<size_t>(mesh.material >= 0 ? mesh.material : 0)];
                 draw_mesh(mesh, material, tool_model, nullptr, 0, false, waterline);

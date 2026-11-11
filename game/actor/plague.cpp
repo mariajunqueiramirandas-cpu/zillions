@@ -121,6 +121,7 @@ Mat4 normalized_rigid(const Mat4& m) {
 
 bool PlagueAnimator::init(const GltfModel* model) {
     model_ = nullptr;
+    left_hand_node_ = -1;
     pose_ = PlaguePose{};
     order_.clear();
     base_translations_.clear();
@@ -151,6 +152,7 @@ bool PlagueAnimator::init(const GltfModel* model) {
     if (skin.joints.empty()) return false;
 
     model_ = model;
+    left_hand_node_ = model->node_by_name("mixamorig:LeftHand");
     const std::size_t count = model->nodes.size();
     base_translations_.resize(count);
     base_rotations_.resize(count);
@@ -205,6 +207,8 @@ bool PlagueAnimator::init(const GltfModel* model) {
     if (model_->hand_node >= 0 && (std::size_t)model_->hand_node < count) {
         pose_.hand = normalized_rigid(pose_.globals[(std::size_t)model_->hand_node]);
     }
+    pose_.has_left_hand = left_hand_node_ >= 0 && (std::size_t)left_hand_node_ < count;
+    if (pose_.has_left_hand) pose_.left_hand = normalized_rigid(pose_.globals[(std::size_t)left_hand_node_]);
     pose_.valid = true;
     return true;
 }
@@ -256,9 +260,8 @@ void PlagueAnimator::compute(const HumanMotion& motion, bool advance, f32 dt) {
         action_weight_ = motion.work > 0.0f ? 1.0f : 0.0f;
     }
 
-    const PlagueClip wanted_action = motion.tool == HumanTool::Axe || motion.tool == HumanTool::Pickaxe
-                                         ? PlagueClip::Hammer
-                                         : PlagueClip::Slash;
+    // The authored slash is the axe's one-handed woodcutting action.
+    const PlagueClip wanted_action = motion.tool == HumanTool::Pickaxe ? PlagueClip::Hammer : PlagueClip::Slash;
     if (wanted_action != action_ || motion.tool != tool_) action_restart_ = 0.0f;
     action_ = wanted_action;
     tool_ = motion.tool;
@@ -354,6 +357,7 @@ void PlagueAnimator::compute(const HumanMotion& motion, bool advance, f32 dt) {
     if (model_->hand_node >= 0 && (std::size_t)model_->hand_node < count) {
         pose_.hand = normalized_rigid(pose_.globals[(std::size_t)model_->hand_node]);
     }
+    if (pose_.has_left_hand) pose_.left_hand = normalized_rigid(pose_.globals[(std::size_t)left_hand_node_]);
     pose_.valid = true;
 }
 
@@ -430,7 +434,11 @@ const GltfAnimation* PlagueAnimator::clip_animation(PlagueClip clip) const {
 }
 
 void PlagueAnimator::action_range(HumanTool tool, f32& begin, f32& end) const {
-    if (tool == HumanTool::Axe || tool == HumanTool::Pickaxe) {
+    if (tool == HumanTool::Axe) {
+        // Include the authored recovery, so repeated chops loop naturally.
+        begin = 0.0f;
+        end = clip_duration(PlagueClip::Slash);
+    } else if (tool == HumanTool::Pickaxe) {
         begin = 0.25f;
         end = 1.45f;
     } else {
@@ -439,9 +447,47 @@ void PlagueAnimator::action_range(HumanTool tool, f32& begin, f32& end) const {
     }
 }
 
+Mat4 plague_tool_transform(const PlaguePose& pose, HumanTool tool) {
+    if (tool == HumanTool::None) return Mat4::identity();
+
+    // The hand bones end at the wrists. The glove's palm sits 9 cm along
+    // local +Y (measured in inverse-bind space), not at the bone origin.
+    constexpr Vec3 palm_offset{0.0f, 0.09f, 0.0f};
+    const Vec3 grip = pose.hand.transform_point(palm_offset);
+    Vec3 shaft = pose.hand.transform_vector(normalize(Vec3{0.52f, -0.13f, -0.85f}));
+    if (tool == HumanTool::Axe) shaft = pose.hand.transform_vector({0, 0, -1});
+    else if (pose.has_left_hand) {
+        const Vec3 between = pose.left_hand.transform_point(palm_offset) - grip;
+        if (length(between) > 0.05f) shaft = normalize(between);
+    }
+    shaft = normalize(shaft);
+
+    // Keep the head's cutting plane tied to the right palm while aiming the
+    // handle through the support hand for the pickaxe's hammer clip. The
+    // one-handed axe depends only on the right palm.
+    Vec3 blade = pose.hand.transform_vector({0, 1, 0});
+    blade = blade - shaft * dot(blade, shaft);
+    if (length(blade) < 1.0e-4f) {
+        blade = pose.hand.transform_vector({1, 0, 0});
+        blade = blade - shaft * dot(blade, shaft);
+    }
+    blade = normalize(blade);
+    const Vec3 side = normalize(cross(blade, shaft));
+    Mat4 socket;
+    socket.m[0] = blade.x; socket.m[1] = blade.y; socket.m[2] = blade.z;
+    socket.m[4] = shaft.x; socket.m[5] = shaft.y; socket.m[6] = shaft.z;
+    socket.m[8] = side.x; socket.m[9] = side.y; socket.m[10] = side.z;
+    socket.m[12] = grip.x; socket.m[13] = grip.y; socket.m[14] = grip.z;
+
+    // Both source tools have a +Y handle and the lower grip at y=-0.55.
+    // The one-handed axe is ~0.65 m long; the two-handed pickaxe is ~1.05 m
+    // so its support hand (0.5–0.6 m away) stays below the head.
+    const f32 scale = tool == HumanTool::Axe ? 0.34f : 0.55f;
+    return socket * Mat4::scale({scale, scale, scale}) * Mat4::translation({0, 0.55f, 0});
+}
+
 Mat4 PlagueAnimator::tool_transform(HumanTool tool) const {
-    const f32 yaw = tool == HumanTool::Axe ? -kPi * 0.5f : 0.0f;
-    return pose_.hand * Mat4::rotation_x(-kPi * 0.5f) * Mat4::rotation_y(yaw);
+    return plague_tool_transform(pose_, tool);
 }
 
 }  // namespace zl

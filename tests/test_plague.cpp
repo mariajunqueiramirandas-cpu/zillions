@@ -44,7 +44,7 @@ bool pose_finite(const PlaguePose& pose) {
     for (const Mat4& m : pose.bones) {
         if (!finite_matrix(m)) return false;
     }
-    return finite_matrix(pose.hand);
+    return finite_matrix(pose.hand) && finite_matrix(pose.left_hand);
 }
 
 f32 distance(Vec3 a, Vec3 b) { return length(a - b); }
@@ -108,27 +108,89 @@ int main() {
     animator.pose(fast);
     CHECK(animator.locomotion_clip() == PlagueClip::Idle);
 
-    // The axe drives the hammer swing through the work phase.
+    // The axe uses the authored one-handed woodcutting slash.
     HumanMotion work;
     work.speed = 0.0f;
     work.tool = HumanTool::Axe;
     work.work = 1.0f;
     work.work_phase = 0.2f;
     animator.pose(work);
-    CHECK(animator.action_clip() == PlagueClip::Hammer);
+    CHECK(animator.action_clip() == PlagueClip::Slash);
     CHECK(std::fabs(animator.action_weight() - 1.0f) < 1.0e-5f);
-    const Vec3 hammer_early = animator.current().hand.translation();
+    const Vec3 axe_early = animator.current().hand.translation();
     work.work_phase = 0.8f;
     animator.pose(work);
-    CHECK(animator.action_clip() == PlagueClip::Hammer);
-    const Vec3 hammer_late = animator.current().hand.translation();
-    CHECK(distance(hammer_early, hammer_late) > 1.0e-3f);
-    CHECK(finite(hammer_late.x) && finite(hammer_late.y) && finite(hammer_late.z));
+    CHECK(animator.action_clip() == PlagueClip::Slash);
+    const Vec3 axe_late = animator.current().hand.translation();
+    CHECK(distance(axe_early, axe_late) > 1.0e-3f);
+    CHECK(pose_finite(animator.current()));
 
     const Mat4 tool = animator.tool_transform(HumanTool::Axe);
     CHECK(finite_matrix(tool));
-    CHECK(distance(tool.translation(), animator.current().hand.translation()) < 1.0e-5f);
+    CHECK(distance(tool.transform_point({0, -0.55f, 0}),
+                   animator.current().hand.transform_point({0, 0.09f, 0})) < 1.0e-5f);
     CHECK(finite_matrix(animator.tool_transform(HumanTool::Pickaxe)));
+
+    // Check the complete wind-up, strike and recovery. The axe's right-palm
+    // socket must not depend on the free left hand; the pickaxe's shaft must
+    // pass through both palms without scaling or shearing with hand spacing.
+    for (const HumanTool held : {HumanTool::Axe, HumanTool::Pickaxe}) {
+        for (i32 frame = 0; frame < 100; ++frame) {
+            work.tool = held;
+            work.work_phase = static_cast<f32>(frame) / 100.0f;
+            animator.pose(work);
+            CHECK(animator.action_clip() == (held == HumanTool::Axe ? PlagueClip::Slash : PlagueClip::Hammer));
+            const PlaguePose& p = animator.current();
+            const Mat4 attachment = animator.tool_transform(held);
+            const Vec3 palm = p.hand.transform_point({0, 0.09f, 0});
+            CHECK(pose_finite(p));
+            CHECK(distance(attachment.transform_point({0, -0.55f, 0}), palm) < 1.0e-5f);
+            const Vec3 x = attachment.transform_vector({1, 0, 0});
+            const Vec3 y = attachment.transform_vector({0, 1, 0});
+            const Vec3 z = attachment.transform_vector({0, 0, 1});
+            const f32 scale = held == HumanTool::Axe ? 0.34f : 0.55f;
+            CHECK(std::fabs(length(x) - scale) < 1.0e-5f);
+            CHECK(std::fabs(length(y) - scale) < 1.0e-5f);
+            CHECK(std::fabs(length(z) - scale) < 1.0e-5f);
+            CHECK(std::fabs(dot(x, y)) < 1.0e-5f);
+            CHECK(dot(cross(x, y), z) > 0);
+            if (held == HumanTool::Pickaxe) {
+                const Vec3 support = p.left_hand.transform_point({0, 0.09f, 0}) - palm;
+                CHECK(length(cross(normalize(y), support)) < 1.0e-5f);
+                CHECK(dot(normalize(y), support) > 0);
+                CHECK(length(support) < (0.75f + 0.55f) * scale);
+            } else {
+                PlaguePose moved_left = p;
+                moved_left.left_hand = Mat4::translation({10, 20, 30});
+                CHECK(!matrices_differ(attachment, plague_tool_transform(moved_left, held), 1.0e-6f));
+            }
+        }
+    }
+
+    // Axe poses must come directly from the authored slash, including the
+    // free arm. Compare its local arm rotation against the original keys.
+    work.tool = HumanTool::Axe;
+    work.work_phase = 0.30f;
+    animator.pose(work);
+    const GltfAnimation* slash = model.animation("Right_Hand_Sword_Slash");
+    CHECK(slash != nullptr);
+    CHECK(std::fabs(animator.action_time() - 0.45f) < 1.0e-5f);
+    const i32 left_arm = model.node_by_name("mixamorig:LeftArm");
+    CHECK(left_arm >= 0);
+    if (slash && left_arm >= 0) {
+        const GltfChannel* channel = slash->channel(left_arm, GltfPath::Rotation);
+        CHECK(channel != nullptr);
+        if (channel) {
+            size_t next = 1;
+            while (next + 1 < channel->times.size() && channel->times[next] < animator.action_time()) ++next;
+            const f32 alpha = (animator.action_time() - channel->times[next - 1]) /
+                              (channel->times[next] - channel->times[next - 1]);
+            const Quat expected = quat_slerp(channel->quat[next - 1], channel->quat[next], alpha);
+            const Quat actual = animator.current().rotations[(size_t)left_arm];
+            const f32 alignment = expected.x * actual.x + expected.y * actual.y + expected.z * actual.z + expected.w * actual.w;
+            CHECK(std::fabs(alignment) > 0.9999f);
+        }
+    }
 
     // Without a tool the sword slash plays instead.
     work.tool = HumanTool::None;

@@ -27,8 +27,14 @@ struct PlaguePose {
     std::vector<Mat4> globals;       // per node, model space
     std::vector<Mat4> bones;         // per skin joint: global * inverse bind
     Mat4 hand;                       // right hand, rotation normalised, metres
+    Mat4 left_hand;                  // support hand, same space as hand
+    bool has_left_hand = false;
     bool valid = false;
 };
+
+// Raw tool GLB -> character space. Shared by the renderer and animator so
+// sockets, shaft alignment, authored grip and scale have one implementation.
+Mat4 plague_tool_transform(const PlaguePose& pose, HumanTool tool);
 
 class PlagueAnimator {
 public:
@@ -46,9 +52,7 @@ public:
     const GltfModel* model() const { return model_; }
     bool ready() const { return model_ != nullptr && pose_.valid; }
 
-    // Hand transform times the tool's grip orientation, in model space. The
-    // renderer multiplies this by the world transform and draws a tool mesh
-    // whose vertices have already been moved to its grip.
+    // Maps the raw tool model to the animated palms, including grip and scale.
     Mat4 tool_transform(HumanTool tool) const;
 
     // Debug and test accessors.
@@ -73,6 +77,7 @@ private:
     std::vector<Vec3> base_translations_;
     std::vector<Quat> base_rotations_;
     std::vector<Vec3> base_scales_;
+    i32 left_hand_node_ = -1;
 
     PlagueClip locomotion_ = PlagueClip::Idle;
     PlagueClip previous_ = PlagueClip::Idle;

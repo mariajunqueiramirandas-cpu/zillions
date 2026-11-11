@@ -104,7 +104,7 @@ void usage() {
         "  --speed M --phase P  screenshots: its speed in m/s and place in the stride, 0..1\n"
         "  --look N             a different person for every N (default: the hero)\n"
         "  --hood               hood up\n"
-        "  --tool axe|pickaxe   pose a procedural tool for screenshots\n"
+        "  --tool axe|pickaxe   pose a held tool for screenshots\n"
         "  --work-phase P       screenshot tool swing phase, 0..1\n"
         "controls: WASD/arrows walk, Shift sprint, Ctrl stroll, wheel zoom,\n"
         "          hold left mouse near resource bases to gather, I inventory, B crafting,\n"
