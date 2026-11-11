@@ -18,6 +18,9 @@ namespace {
 constexpr f32 kDecorMinZoom = 2.5f;
 constexpr f32 kChunkSize = 16.0f;
 constexpr i32 kShadowResolution = 2048;
+// Physical shadow/receiver proxies for the painted low props. The box's base
+// is the footprint center; its volume is independent of the camera's sprite.
+constexpr Vec3 kChestBox{0.55f,0.20f,0.34f}; // half width/depth, full height
 
 struct ShadowCaster {
     f32 x, y, z;
@@ -327,6 +330,17 @@ void main() {
 }
 )";
 
+const char* kSolidVertex = R"(#version 330 core
+layout(location=0) in vec3 aPosition;
+uniform vec4 uShadowBounds;
+uniform vec2 uShadowLight;
+uniform float uShadowHeight;
+void main() {
+    vec2 p=(aPosition.xy-uShadowLight*aPosition.z-uShadowBounds.xy)/uShadowBounds.zw;
+    gl_Position=vec4(p*2.0-1.0,1.0-2.0*aPosition.z/uShadowHeight,1.0);
+}
+)";
+
 const char* kCollisionVertex = R"(#version 330 core
 layout(location = 0) in vec2 aPosition;
 layout(location = 1) in vec4 aColor;
@@ -354,6 +368,9 @@ MapRenderer::~MapRenderer() {
     if (shadow_texture_) glDeleteTextures(1, &shadow_texture_);
     if (caster_vao_) glDeleteVertexArrays(1, &caster_vao_);
     if (caster_buffer_) glDeleteBuffers(1, &caster_buffer_);
+    if (solid_vao_) glDeleteVertexArrays(1,&solid_vao_);
+    if (solid_buffer_) glDeleteBuffers(1,&solid_buffer_);
+    if (shadow_depth_sampler_) glDeleteSamplers(1,&shadow_depth_sampler_);
     if (collision_vao_) glDeleteVertexArrays(1, &collision_vao_);
     if (collision_buffer_) glDeleteBuffers(1, &collision_buffer_);
 }
@@ -365,6 +382,7 @@ void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     terrain_.compile("terrain", kTerrainVertex, fragment.c_str());
     terrain_depth_.compile("terrain shadow depth", kTerrainVertex, kDepthFragment);
     scenery_depth_.compile("scenery shadow depth", kCasterVertex, kCasterFragment);
+    solid_depth_.compile("solid prop shadow depth",kSolidVertex,kDepthFragment);
     collision_lines_.compile("collision volumes", kCollisionVertex, kCollisionFragment);
     terrain_.bind();
     glUniform1i(terrain_.uniform("uTiles"), 0);
@@ -414,6 +432,19 @@ void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     ZL_CHECK(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "shadow framebuffer is incomplete");
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     shadow_view_.texture = shadow_texture_;
+    glGenSamplers(1,&shadow_depth_sampler_);
+    glSamplerParameteri(shadow_depth_sampler_,GL_TEXTURE_COMPARE_MODE,GL_NONE);
+    glSamplerParameteri(shadow_depth_sampler_,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    glSamplerParameteri(shadow_depth_sampler_,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    glSamplerParameteri(shadow_depth_sampler_,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_BORDER);
+    glSamplerParameteri(shadow_depth_sampler_,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_BORDER);
+    glSamplerParameterfv(shadow_depth_sampler_,GL_TEXTURE_BORDER_COLOR,border);
+    shadow_view_.depth_sampler=shadow_depth_sampler_;
+    glGenVertexArrays(1,&solid_vao_);glGenBuffers(1,&solid_buffer_);
+    glBindVertexArray(solid_vao_);glBindBuffer(GL_ARRAY_BUFFER,solid_buffer_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(Vec3),nullptr);
+    glBindVertexArray(0);
 
     glGenVertexArrays(1, &caster_vao_);
     glGenBuffers(1, &caster_buffer_);
@@ -430,6 +461,7 @@ void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     for (u32 i = 0; i < 4; ++i) glVertexAttribDivisor(i, 1);
     glBindVertexArray(0);
     batch_.init();
+    batch_.set_box_dimensions(kChestBox);
     glGenVertexArrays(1, &collision_vao_);
     glGenBuffers(1, &collision_buffer_);
     glBindVertexArray(collision_vao_);
@@ -524,9 +556,10 @@ void MapRenderer::build_decor(const TileMap& map) {
         sprite.u0 = d.u0; sprite.v0 = d.v0; sprite.u1 = d.u1; sprite.v1 = d.v1;
         sprite.color = pack_color(object.color.r, object.color.g, object.color.b, object.color.a);
         sprite.anchor = d.anchor_y / d.height;
+        if(object.kind==SceneryKind::Chest)sprite.box_facing=static_cast<f32>(object.facing);
         const bool casts = scenery_blocks(object.kind) || object.kind == SceneryKind::Bush || object.kind == SceneryKind::Stump;
         decor_.push_back({object.position, ground_height(object.position), sprite, casts,
-                          object.kind==SceneryKind::Chest?set.first:-1,object.facing});
+                          object.kind==SceneryKind::Chest?set.first:-1,object.facing,object.kind,object.scale});
     }
 
     for (i32 view = 0; view < 4; ++view) {
@@ -765,11 +798,37 @@ void MapRenderer::update_shadows(const IsometricCamera& camera) {
 
     const Vec2 right = camera.unrotate({IsometricCamera::kX, -IsometricCamera::kX});
     std::vector<ShadowCaster> casters;
+    std::vector<Vec3> solid_vertices;
     casters.reserve(decor_.size() / 2);
     for (const Decor& decor : decor_) {
         if (!decor.casts_shadow) continue;
         const SpriteInstance sprite = view_sprite(decor,camera.rotation);
         const f32 height = surface_height(decor.ground, camera.zoom);
+        if(decor.kind==SceneryKind::Chest||decor.kind==SceneryKind::Stump) {
+            const auto point=[&](Vec3 p) {
+                p=p*decor.scale;
+                IsometricCamera orientation;orientation.rotation=decor.facing;
+                const Vec2 xy=orientation.rotate({p.x,p.y})+decor.ground;
+                return Vec3{xy.x,xy.y,height+p.z};
+            };
+            const auto triangle=[&](Vec3 a,Vec3 b,Vec3 c) {
+                solid_vertices.push_back(point(a));solid_vertices.push_back(point(b));solid_vertices.push_back(point(c));
+            };
+            if(decor.kind==SceneryKind::Chest) {
+                Vec3 corners[8];
+                for(int i=0;i<8;++i)corners[i]={(i&1)?kChestBox.x:-kChestBox.x,(i&2)?kChestBox.y:-kChestBox.y,(i&4)?kChestBox.z:0};
+                const int indices[]={0,2,1,1,2,3,4,5,6,5,7,6,0,1,4,1,5,4,2,6,3,3,6,7,0,4,2,2,4,6,1,3,5,3,7,5};
+                for(int i=0;i<36;i+=3)triangle(corners[indices[i]],corners[indices[i+1]],corners[indices[i+2]]);
+            } else {
+                for(int i=0;i<12;++i) {
+                    const float a=static_cast<float>(i)*6.2831853f/12,b=static_cast<float>(i+1)*6.2831853f/12;
+                    const Vec3 bottom_a{std::cos(a)*0.22f,std::sin(a)*0.22f,0},bottom_b{std::cos(b)*0.22f,std::sin(b)*0.22f,0};
+                    const Vec3 top_a{bottom_a.x*0.8f,bottom_a.y*0.8f,0.35f},top_b{bottom_b.x*0.8f,bottom_b.y*0.8f,0.35f};
+                    triangle(bottom_a,bottom_b,top_a);triangle(bottom_b,top_b,top_a);triangle({0,0,0.35f},top_a,top_b);
+                }
+            }
+            continue; // Do not also cast the camera-facing picture plane.
+        }
         Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
         for (i32 corner = 0; corner < 4; ++corner) {
             const Vec2 p = decor.ground + right * (sprite.x + ((corner & 1) ? sprite.w : 0.0f));
@@ -791,6 +850,12 @@ void MapRenderer::update_shadows(const IsometricCamera& camera) {
     glBindBuffer(GL_ARRAY_BUFFER, caster_buffer_);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(casters.size() * sizeof(ShadowCaster)), casters.data(), GL_STREAM_DRAW);
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, static_cast<GLsizei>(casters.size()));
+    if(!solid_vertices.empty()) {
+        solid_depth_.bind();bind_shadows(solid_depth_,&shadow_view_);
+        glBindVertexArray(solid_vao_);glBindBuffer(GL_ARRAY_BUFFER,solid_buffer_);
+        glBufferData(GL_ARRAY_BUFFER,static_cast<GLsizeiptr>(solid_vertices.size()*sizeof(Vec3)),solid_vertices.data(),GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES,0,static_cast<GLsizei>(solid_vertices.size()));
+    }
     glBindVertexArray(0);
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(draw_fbo));
@@ -938,7 +1003,7 @@ void MapRenderer::draw_scenery(const IsometricCamera& camera, f32 depth_begin, f
             const f32 height = surface_height(decor.ground, camera.zoom);
             projected = camera.project(decor.ground, height);
             sprite.y = decor.sprite.y + projected.y;
-            sprite.depth = -camera.depth(decor.ground, height) * scale_depth - 0.025f * scale_depth;
+            sprite.depth = -camera.depth(decor.ground, height) * scale_depth - kSpriteDepthBias * scale_depth;
             sprite.depth_span = sprite.h / (2.0f * IsometricCamera::kZ) * scale_depth;
             sprite.ground_span = -sprite.h * (IsometricCamera::kDepthXY / IsometricCamera::kY) * scale_depth;
             if (reveal && sprite.h > 1.1f) {

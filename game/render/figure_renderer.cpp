@@ -16,7 +16,8 @@ namespace {
 //   1: ra, rb, depth of a, depth of b (towards the viewer)
 //   2: height of a, height of b, roundness, material + 8 * flags
 //   3: colour, group
-constexpr i32 kTexelsPerPart = 4;
+//   4: projected cutting-edge half-width, world height, view depth
+constexpr i32 kTexelsPerPart = 5;
 constexpr i32 kRowTexels = kMaxFigureParts * kTexelsPerPart;
 
 // The shader names the materials by number.
@@ -140,29 +141,47 @@ float cone(vec2 p, vec2 a, vec2 b, float ra, float rb, bool flatCaps, out float 
     return d;
 }
 
-vec4 toolSample(vec2 p,vec4 ends,vec4 size,int material) {
+// Invert the projected 3D shaft/blade plane. A front/back view may mirror
+// the painted face; the cutting edge still points along the strike plane.
+vec2 toolCoordinates(vec2 p,vec4 ends,vec4 side) {
     vec2 line=ends.zw-ends.xy;
     float len=max(length(line),1e-5);
-    vec2 axis=line/len;
-    float t=dot(p-ends.xy,axis)/len;
-    float u=dot(p-ends.xy,vec2(-axis.y,axis.x))/(2.0*size.x)+0.5;
-    if(t<0.0||t>1.0||u<0.0||u>1.0)return vec4(0.0);
-    return texture(uToolArtwork,vec2((u+float(material-5))*0.5,1.0-t));
+    vec2 axis=length(line)>1e-5?line/len:vec2(0,-1);
+    vec2 normal=vec2(-axis.y,axis.x);
+    vec2 across=side.xy;
+    float width=dot(across,normal);
+    float minimum=0.008;
+    if(abs(width)<minimum)across+=normal*((width<0.0?-minimum:minimum)-width);
+    float determinant=line.x*across.y-line.y*across.x;
+    if(abs(determinant)<1e-8)return vec2(-2.0);
+    vec2 q=p-ends.xy;
+    return vec2((q.x*across.y-q.y*across.x)/determinant,(line.x*q.y-line.y*q.x)/determinant);
 }
 
-float partDistance(vec2 p,vec4 ends,vec4 size,int code,out float t,out vec2 off,out float r) {
+vec4 toolSample(vec2 p,vec4 ends,vec4 side,int material) {
+    vec2 uv=toolCoordinates(p,ends,side);
+    if(uv.x<0.0||uv.x>1.0||abs(uv.y)>1.0)return vec4(0.0);
+    return texture(uToolArtwork,vec2((0.5+uv.y*0.5+float(material-5))*0.5,1.0-uv.x));
+}
+
+float partDistance(vec2 p,vec4 ends,vec4 size,vec4 side,int code,out float t,out vec2 off,out float r) {
     int material=code&7;
     if(material>=5&&uHasToolArtwork) {
-        vec2 line=ends.zw-ends.xy;
-        t=clamp(dot(p-ends.xy,line)/max(dot(line,line),1e-10),0.0,1.0);
-        off=p-mix(ends.xy,ends.zw,t);r=0.0;
-        float alpha=toolSample(p,ends,size,material).a;
-        // Fully transparent texels are outside the shape even for the much
-        // softer ground-shadow kernel. A half-pixel distance would shade the
-        // entire transparent canvas as a rectangular shadow.
+        vec2 uv=toolCoordinates(p,ends,side);
+        t=clamp(uv.x,0.0,1.0);off=vec2(uv.y,0.0);r=0.0;
+        float alpha=toolSample(p,ends,side,material).a;
         return alpha<0.01?1.0:(0.5-alpha)*uPixel;
     }
     return cone(p,ends.xy,ends.zw,size.x,size.y,(code&8)!=0,t,off,r);
+}
+
+float partHeight(vec4 more,vec4 side,float t,vec2 off,float bulge) {
+    if((int(more.w+0.5)&7)>=5)return mix(more.x,more.y,t)+off.x*side.z;
+    return surfaceHeight(more,t,off,bulge);
+}
+
+float partDepth(vec4 size,vec4 more,vec4 side,float t,vec2 off,float bulge) {
+    return mix(size.z,size.w,t)+((int(more.w+0.5)&7)>=5?off.x*side.w:bulge);
 }
 
 // How much of the light another part keeps off the surface point (p, z):
@@ -172,21 +191,24 @@ float occlusion(vec2 p, float z, int count, float water) {
     float z1 = z + LIGHT.z * 0.030, z2 = z + LIGHT.z * 0.075;
     float dark = 0.0;
     for (int i = 0; i < count; ++i) {
-        vec4 ends = texelFetch(uParts, ivec2(i * 4, vRow), 0);
-        vec4 size = texelFetch(uParts, ivec2(i * 4 + 1, vRow), 0);
+        vec4 ends = texelFetch(uParts, ivec2(i * 5, vRow), 0);
+        vec4 size = texelFetch(uParts, ivec2(i * 5 + 1, vRow), 0);
         bool near1 = nearPart(p1, ends.xy, ends.zw, size.x, size.y, 0.0);
         bool near2 = nearPart(p2, ends.xy, ends.zw, size.x, size.y, 0.0);
         if (!near1 && !near2) continue;
-        vec4 more = texelFetch(uParts, ivec2(i * 4 + 2, vRow), 0);
+        vec4 more = texelFetch(uParts, ivec2(i * 5 + 2, vRow), 0);
+        vec4 side=texelFetch(uParts,ivec2(i * 5 + 4,vRow),0);
         int code=int(more.w+0.5);
         float t, r;
         vec2 off;
-        if (near1 && partDistance(p1,ends,size,code,t,off,r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
-            float middle = mix(size.z, size.w, t), bulge = sqrt(max(r * r - dot(off, off), 0.0));
+        if (near1 && partDistance(p1,ends,size,side,code,t,off,r) < 0.0 && partHeight(more,side,t,off,sqrt(max(r * r - dot(off, off),0.0))) >= water) {
+            float bulge = sqrt(max(r * r - dot(off, off), 0.0));
+            float middle=partDepth(size,more,side,t,off,0.0);
             dark = max(dark, smoothstep(0.004, 0.020, middle + bulge - z1) * step(middle - bulge, z1 + 0.12));
         }
-        if (near2 && partDistance(p2,ends,size,code,t,off,r) < 0.0 && surfaceHeight(more, t, off, sqrt(max(r * r - dot(off, off), 0.0))) >= water) {
-            float middle = mix(size.z, size.w, t), bulge = sqrt(max(r * r - dot(off, off), 0.0));
+        if (near2 && partDistance(p2,ends,size,side,code,t,off,r) < 0.0 && partHeight(more,side,t,off,sqrt(max(r * r - dot(off, off),0.0))) >= water) {
+            float bulge = sqrt(max(r * r - dot(off, off), 0.0));
+            float middle=partDepth(size,more,side,t,off,0.0);
             dark = max(dark, smoothstep(0.004, 0.020, middle + bulge - z2) * step(middle - bulge, z2 + 0.12));
         }
     }
@@ -198,18 +220,19 @@ float occlusion(vec2 p, float z, int count, float water) {
 // Also returns its distance, its group, and `rim`: 1 where its edge faces away
 // from the light.
 vec3 paint(int i, vec2 p, int count, float water, bool shadowed, out float d, out float group, out float rim) {
-    vec4 ends = texelFetch(uParts, ivec2(i * 4, vRow), 0);
-    vec4 size = texelFetch(uParts, ivec2(i * 4 + 1, vRow), 0);
-    vec4 more = texelFetch(uParts, ivec2(i * 4 + 2, vRow), 0);
-    vec4 tint = texelFetch(uParts, ivec2(i * 4 + 3, vRow), 0);
+    vec4 ends = texelFetch(uParts, ivec2(i * 5, vRow), 0);
+    vec4 size = texelFetch(uParts, ivec2(i * 5 + 1, vRow), 0);
+    vec4 more = texelFetch(uParts, ivec2(i * 5 + 2, vRow), 0);
+    vec4 tint = texelFetch(uParts, ivec2(i * 5 + 3, vRow), 0);
+    vec4 side=texelFetch(uParts,ivec2(i * 5 + 4,vRow),0);
     int code = int(more.w + 0.5);
     int material = code & 7;
     float t, r;
     vec2 off;
-    d = partDistance(p,ends,size,code,t,off,r);
+    d = partDistance(p,ends,size,side,code,t,off,r);
     group = tint.a;
     if(material>=5&&uHasToolArtwork) {
-        vec4 artwork=toolSample(p,ends,size,material);
+        vec4 artwork=toolSample(p,ends,side,material);
         rim=0.0;
         return artwork.rgb/max(artwork.a,1e-5);
     }
@@ -299,18 +322,19 @@ void main() {
     float zFirst = -1.0e9, zSecond = -1.0e9;
     float inside = 1.0e9, shadow = 0.0;
     for (int i = 0; i < count; ++i) {
-        vec4 ends = texelFetch(uParts, ivec2(i * 4, vRow), 0);
-        vec4 size = texelFetch(uParts, ivec2(i * 4 + 1, vRow), 0);
-        vec4 more = texelFetch(uParts, ivec2(i * 4 + 2, vRow), 0);
+        vec4 ends = texelFetch(uParts, ivec2(i * 5, vRow), 0);
+        vec4 size = texelFetch(uParts, ivec2(i * 5 + 1, vRow), 0);
+        vec4 more = texelFetch(uParts, ivec2(i * 5 + 2, vRow), 0);
+        vec4 side=texelFetch(uParts,ivec2(i * 5 + 4,vRow),0);
         float t, r;
         vec2 off;
         if (nearPart(p, ends.xy, ends.zw, size.x, size.y, 0.5 * aa)) {
-            float d = partDistance(p,ends,size,int(more.w+0.5),t,off,r);
+            float d = partDistance(p,ends,size,side,int(more.w+0.5),t,off,r);
             float bulge = sqrt(max(r * r - dot(off, off), 0.0));
-            if (water > 0.0) d = max(d, water - surfaceHeight(more, t, off, bulge));
+            if (water > 0.0) d = max(d, water - partHeight(more,side,t,off,bulge));
             if (d < 0.5 * aa) {
                 inside = min(inside, d);
-                float z = mix(size.z, size.w, t) + bulge;
+                float z=partDepth(size,more,side,t,off,bulge);
                 if (z > zFirst) {
                     second = first;
                     zSecond = zFirst;
@@ -328,7 +352,8 @@ void main() {
             if (!nearPart(p, a, b, size.x * 0.85, size.y * 0.85, 0.012 + 0.075 * max(ha, hb))) continue;
             int shadowCode=int(more.w+0.5);
             if((shadowCode&7)<5)shadowCode=shadowCode&(~8);
-            float d2 = partDistance(p,vec4(a,b),vec4(size.xy*0.85,size.zw),shadowCode,t,off,r);
+            vec4 shadowSide=side;shadowSide.xy=(side.xy+uShadow*side.z)*0.85;
+            float d2 = partDistance(p,vec4(a,b),vec4(size.xy*0.85,size.zw),shadowSide,shadowCode,t,off,r);
             // The further the shadow falls, the softer its edge.
             float soft = 0.012 + 0.075 * mix(ha, hb, t);
             shadow = max(shadow, 1.0 - smoothstep(-soft, soft, d2));
@@ -512,19 +537,30 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
             Vec2 b{pb.x, pb.y * ground_scale - pb.z * up_scale};
             a.y += sink;
             b.y += sink;
-            const f32 texel[16] = {
+            const Vec3 projected_side=project_part(part.image_side);
+            const f32 texel[20] = {
                 a.x, a.y, b.x, b.y,
                 part.ra, part.rb, pa.y * up_scale + pa.z * ground_scale, pb.y * up_scale + pb.z * ground_scale,
                 part.a.z, part.b.z, part.roundness, static_cast<f32>(static_cast<int>(part.material) + 8 * part.flags),
                 static_cast<f32>(part.color.r) / 255.0f, static_cast<f32>(part.color.g) / 255.0f, static_cast<f32>(part.color.b) / 255.0f, static_cast<f32>(part.group),
+                projected_side.x,projected_side.y*ground_scale-projected_side.z*up_scale,part.image_side.z,projected_side.y*up_scale+projected_side.z*ground_scale,
             };
-            std::copy_n(texel, 16, out + static_cast<size_t>(i) * 16);
+            std::copy_n(texel,20,out+static_cast<size_t>(i)*20);
             grow(a, part.ra);
             grow(b, part.rb);
             // And the shadow it throws, with room for its soft edge.
             const f32 ha = std::max(part.a.z - water, 0.0f), hb = std::max(part.b.z - water, 0.0f);
             grow(a + shadow * ha, part.ra + 0.02f + 0.08f * ha);
             grow(b + shadow * hb, part.rb + 0.02f + 0.08f * hb);
+            if(part.material>=FigureMaterial::ToolAxe) {
+                const Vec2 side{projected_side.x,projected_side.y*ground_scale-projected_side.z*up_scale};
+                for(float sign:{-1.0f,1.0f}) {
+                    const float za=std::max(part.a.z+sign*part.image_side.z-water,0.0f);
+                    const float zb=std::max(part.b.z+sign*part.image_side.z-water,0.0f);
+                    grow(a+side*sign+shadow*za,0.02f+0.08f*za);
+                    grow(b+side*sign+shadow*zb,0.02f+0.08f*zb);
+                }
+            }
         }
         if (water > 0.0f) {
             grow({0.0f, 0.0f}, kRippleRadius);
@@ -679,7 +715,7 @@ void FigureRenderer::draw(const FigureDraw* figures, u32 count, const Camera2D& 
             const f32 v1 = 1.0f - (source.y + source.h) * raster_zoom / static_cast<f32>(painted_.height());
             out[i] = {item.x, item.y, item.w, item.h, uv(u0), uv(v0), uv(u1), uv(v1), 0xFFFFFFFFu};
             if (world_camera) {
-                out[i].depth = item.unused - 0.025f * depth_scale;
+                out[i].depth = item.unused - kSpriteDepthBias * depth_scale;
                 out[i].anchor = (item.oy - item.y) / item.h;
                 out[i].depth_span = item.h / (2.0f * IsometricCamera::kZ) * depth_scale;
                 out[i].ground_span = -item.h * (IsometricCamera::kDepthXY / IsometricCamera::kY) * depth_scale;

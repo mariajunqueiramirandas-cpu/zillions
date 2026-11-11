@@ -36,7 +36,8 @@ enum : u8 {
 
 // Body materials define a rounded cone: every point within `ra` of `a`, within
 // `rb` of `b`, and everything between. Tool materials use a..b as the image's
-// centerline and ra as its half-width. Positions are in figure space: tiles, x east, y south,
+// centerline and image_side as its cutting-edge half-width vector, with ra for
+// conservative bounds. Positions are in figure space: tiles, x east, y south,
 // z up, with the origin on the ground where the figure stands.
 struct FigurePart {
     Vec3 a, b;
@@ -48,6 +49,7 @@ struct FigurePart {
     // other; between groups the nearer part keeps a dark edge on its shadow side.
     u8 group = 0;
     f32 roundness = 1.0f;  // 1: lit as a full cylinder; less flattens the shading
+    Vec3 image_side{}; // tool half-width vector: points toward its cutting edge
 };
 
 struct Figure {

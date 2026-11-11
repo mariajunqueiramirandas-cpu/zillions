@@ -253,7 +253,7 @@ bool same_figure(const Figure& a, const Figure& b) {
         if (!near(x.a, y.a) || !near(x.b, y.b) || x.ra != y.ra || x.rb != y.rb ||
             x.color.r != y.color.r || x.color.g != y.color.g || x.color.b != y.color.b ||
             x.color.a != y.color.a || x.material != y.material || x.flags != y.flags ||
-            x.group != y.group || x.roundness != y.roundness) return false;
+            x.group != y.group || x.roundness != y.roundness || !near(x.image_side,y.image_side)) return false;
     }
     return true;
 }

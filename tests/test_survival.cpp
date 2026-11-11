@@ -107,13 +107,27 @@ void bootstrap() {
     }
 }
 void tool_poses() {
-    for(u64 seed=0;seed<16;++seed)for(const auto tool:{HumanTool::Axe,HumanTool::Pickaxe})for(int i=0;i<100;++i) {
+    for(u64 seed=0;seed<16;++seed)for(const auto tool:{HumanTool::Axe,HumanTool::Pickaxe})for(int heading=0;heading<4;++heading)for(int i=0;i<100;++i) {
         HumanMotion motion;motion.tool=tool;motion.work=1;motion.work_phase=static_cast<float>(i)/100;
+        motion.heading=static_cast<float>(heading)*kPi*0.5f;
         auto look=seed==0?hero_look():random_look(seed);look.beard=true;look.hood_up=(seed%2)==0;
         const auto skeleton=pose_human(look,motion);Figure figure;build_human(look,motion,figure);
         CHECK(figure.parts.size()<static_cast<size_t>(kMaxFigureParts));
         for(int arm=0;arm<2;++arm) {CHECK(std::fabs(length(skeleton.elbow[arm]-skeleton.shoulder[arm])-kUpperArmLength)<0.001f);CHECK(std::fabs(length(skeleton.wrist[arm]-skeleton.elbow[arm])-kForearmLength)<0.001f);}
         Vec2 lo,hi;CHECK(figure_screen_bounds(figure,lo,hi));CHECK(std::isfinite(lo.x)&&std::isfinite(hi.y));
+        for(const auto& part:figure.parts)if(part.material>=FigureMaterial::ToolAxe) {
+            const Vec3 shaft=normalize(part.b-part.a);
+            const Vec3 right{-std::sin(motion.heading),std::cos(motion.heading),0};
+            CHECK(std::fabs(dot(shaft,normalize(part.image_side)))<0.0001f);
+            CHECK(dot(normalize(cross(shaft,part.image_side)),right)>0.999f);
+            const float scale=kTilesPerMetre*look.height;
+            for(const auto wrist:skeleton.wrist) {
+                const Vec3 point{(right.x*wrist.x+std::cos(motion.heading)*wrist.y)*scale,
+                                 (right.y*wrist.x+std::sin(motion.heading)*wrist.y)*scale,wrist.z*scale};
+                const Vec3 offset=point-part.a;
+                CHECK(length(offset-shaft*dot(offset,shaft))<0.045f*scale);
+            }
+        }
     }
 }
 void first_camp_loop() {

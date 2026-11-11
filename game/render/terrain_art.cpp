@@ -577,7 +577,7 @@ const Family kFamilies[] = {
     {"branch", Kind::Branch, &TerrainArt::branch, 2, 32, 20, 16.0f, 10.0f},
     {"stump", Kind::Stump, &TerrainArt::stump, 1, 32, 28, 16.0f, 21.0f},
     {"rubble", Kind::Rubble, &TerrainArt::rubble, 1, 32, 20, 16.0f, 12.0f},
-    {"chest", Kind::Chest, &TerrainArt::chest, 4, 48, 40, 24.0f, 27.0f},
+    {"chest", Kind::Chest, &TerrainArt::chest, 4, 48, 40, 24.0f, 22.5f},
 };
 
 struct SpriteItem {

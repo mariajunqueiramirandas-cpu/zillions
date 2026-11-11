@@ -14,12 +14,15 @@ layout(location = 0) in vec4 aRect;
 layout(location = 1) in vec4 aUV;
 layout(location = 2) in vec4 aColor;
 layout(location = 3) in vec4 aDepth;
+layout(location = 4) in float aBoxFacing;
 uniform vec4 uView;  // xy: clip scale, zw: clip offset
 out vec2 vUV;
 out vec4 vColor;
 flat out vec4 vDepth;
 out float vY;
 out vec2 vPlane;
+flat out vec4 vRect;
+flat out float vBoxFacing;
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     vec2 world = aRect.xy + aRect.zw * corner;
@@ -28,6 +31,7 @@ void main() {
     vDepth = aDepth;
     vY = corner.y;
     vPlane = world;
+    vRect=aRect;vBoxFacing=aBoxFacing;
     gl_Position = vec4(world * uView.xy + uView.zw, aDepth.x, 1.0);
 }
 )";
@@ -37,18 +41,59 @@ const char* kFragment = R"(
 uniform sampler2D uAtlas;
 uniform mat2 uInverseRotation;
 uniform float uWorldDepthScale;
+uniform vec3 uBoxDimensions;
+uniform float uBoxCanvasWidth;
+uniform float uDepthBias;
 in vec2 vUV;
 in vec4 vColor;
 flat in vec4 vDepth;
 in float vY;
 in vec2 vPlane;
+flat in vec4 vRect;
+flat in float vBoxFacing;
 out vec4 oColor;
+
+vec2 worldPoint(vec2 plane,float height) {
+    float sum=(plane.y+height*0.866025404)/0.353553391;
+    float difference=plane.x/0.707106781;
+    return uInverseRotation*vec2(sum+difference,sum-difference)*0.5;
+}
+
+vec3 boxSurface(float oldDepth, out vec3 shadowLow, out vec3 shadowHigh) {
+    vec2 basePlane=vRect.xy+vRect.zw*vec2(0.5,vDepth.z);
+    float baseHeight=(-(vDepth.x/uWorldDepthScale+uDepthBias)-basePlane.y*1.732050808)*0.5;
+    vec2 base=worldPoint(basePlane,baseHeight);
+    vec3 size=uBoxDimensions*(vRect.z/uBoxCanvasWidth);
+    float angle=vBoxFacing*1.570796327;
+    mat2 orientation=mat2(cos(angle),sin(angle),-sin(angle),cos(angle));
+    vec2 worldExtent=abs(orientation*size.xy);
+    shadowLow=vec3(base-worldExtent,baseHeight);
+    shadowHigh=vec3(base+worldExtent,baseHeight+size.z);
+    vec3 origin=vec3(transpose(orientation)*(worldPoint(vPlane,baseHeight)-base),0.0);
+    vec3 direction=vec3(transpose(orientation)*uInverseRotation*vec2(1.224744871),1.0);
+    vec3 low=vec3(-size.xy,0.0),high=size;
+    vec3 a=(low-origin)/direction,b=(high-origin)/direction;
+    vec3 nearH=min(a,b),farH=max(a,b);
+    float first=max(max(nearH.x,nearH.y),nearH.z),last=min(min(farH.x,farH.y),farH.z);
+    float height=last;
+    if(last<first)height=clamp((-oldDepth/uWorldDepthScale-vPlane.y*1.732050808)*0.5-baseHeight,0.0,size.z);
+    vec3 local=clamp(origin+direction*height,low,high);
+    return vec3(base+orientation*local.xy,baseHeight+local.z);
+}
+
 void main() {
     vec4 texel = texture(uAtlas, vUV);
     // Above the anchor this is an upright object; below it the painted contact
     // shadow lies on the ground. Both must compare correctly with terrain.
     float delta = vY - vDepth.z;
     float depth = vDepth.x + delta * (delta < 0.0 ? vDepth.y : vDepth.w);
+    bool box=vBoxFacing>=0.0&&uBoxDimensions.z>0.0;
+    vec3 boxPoint=vec3(0.0);
+    vec3 shadowLow=vec3(0.0),shadowHigh=vec3(0.0);
+    if(box) {
+        boxPoint=boxSurface(depth,shadowLow,shadowHigh);
+        depth=-(vPlane.y*1.732050808+2.0*boxPoint.z+uDepthBias)*uWorldDepthScale;
+    }
     gl_FragDepth = depth * 0.5 + 0.5;
     oColor = texel * vec4(vColor.rgb * vColor.a, vColor.a);
     if (uShadows) {
@@ -59,7 +104,10 @@ void main() {
         vec2 position = uInverseRotation * vec2(sum + difference, sum - difference) * 0.5;
         // A billboard's plane can extend below ground when extrapolated across
         // the PCF kernel. Do not use terrain's receiver-plane correction here.
-        float visibility = shadowVisibility(position, height, false);
+        if(box){position=boxPoint.xy;height=boxPoint.z;}
+        // The generated image already paints its own face lighting. Ignore
+        // this approximate proxy's self-shadow, while retaining external casters.
+        float visibility = shadowVisibility(position, height, false, shadowLow, shadowHigh);
         oColor.rgb *= mix(vec3(0.53, 0.58, 0.65), vec3(1.0), visibility);
     }
     if (texel.a < 0.002) discard;
@@ -98,6 +146,9 @@ void SpriteBatch::init() {
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offsetof(SpriteInstance, depth)));
     glVertexAttribDivisor(3, 1);
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,stride,reinterpret_cast<void*>(offsetof(SpriteInstance,box_facing)));
+    glVertexAttribDivisor(4,1);
     glBindVertexArray(0);
 }
 
@@ -136,7 +187,10 @@ void SpriteBatch::draw(u32 count, const Camera2D& camera, u32 atlas_texture,
     const Vec2 scale = camera.clip_scale(), offset = camera.clip_offset();
     glUniform4f(u_view_, scale.x, scale.y, offset.x, offset.y);
     bind_shadows(shader_, shadows);
-    if (shadows && world_camera) {
+    glUniform3f(shader_.uniform("uBoxDimensions"),box_dimensions_.x,box_dimensions_.y,box_dimensions_.z);
+    glUniform1f(shader_.uniform("uBoxCanvasWidth"),box_canvas_width_);
+    glUniform1f(shader_.uniform("uDepthBias"),kSpriteDepthBias);
+    if (world_camera) {
         const Vec2 x = world_camera->unrotate({1, 0}), y = world_camera->unrotate({0, 1});
         const f32 inverse[] = {x.x, x.y, y.x, y.y};
         glUniformMatrix2fv(shader_.uniform("uInverseRotation"), 1, GL_FALSE, inverse);

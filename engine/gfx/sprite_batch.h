@@ -1,4 +1,4 @@
-// Instanced sprite renderer. Every sprite is one 44-byte instance; the quad
+// Instanced sprite renderer. Every sprite is one 48-byte instance; the quad
 // corners are derived from gl_VertexID, so there is no vertex buffer at all.
 // A whole batch, whatever its size, is a single draw call.
 #pragma once
@@ -12,6 +12,8 @@
 
 namespace zl {
 
+inline constexpr f32 kSpriteDepthBias = 0.025f;
+
 struct SpriteInstance {
     f32 x, y;         // world position of the top-left corner
     f32 w, h;         // world size
@@ -22,8 +24,9 @@ struct SpriteInstance {
     f32 depth_span = 0.0f;    // vertical object's depth slope, per sprite height
     f32 anchor = 0.0f;        // normalised vertical ground anchor
     f32 ground_span = 0.0f;   // ground-plane depth slope for the painted shadow
+    f32 box_facing = -1.0f;   // 0..3: receive depth/shadows on an oriented box; -1: billboard
 };
-static_assert(sizeof(SpriteInstance) == 44, "SpriteInstance layout is part of the vertex format");
+static_assert(sizeof(SpriteInstance) == 48, "SpriteInstance layout is part of the vertex format");
 
 constexpr u32 pack_color(u8 r, u8 g, u8 b, u8 a = 255) {
     return static_cast<u32>(r) | (static_cast<u32>(g) << 8) | (static_cast<u32>(b) << 16) | (static_cast<u32>(a) << 24);
@@ -37,6 +40,9 @@ public:
     SpriteBatch& operator=(const SpriteBatch&) = delete;
 
     void init();
+    // Proxy dimensions for centered painted boxes: half width/depth and full
+    // height. canvas_width is the unscaled sprite canvas width in world units.
+    void set_box_dimensions(Vec3 dimensions, f32 canvas_width = 1.5f) { box_dimensions_=dimensions; box_canvas_width_=canvas_width; }
 
     // Returns write-only GPU memory with room for `capacity` instances. Fill it
     // back to front, then call draw() with the number actually written. The
@@ -58,6 +64,8 @@ private:
     u32 vbo_ = 0;
     u32 capacity_ = 0;
     bool mapped_ = false;
+    Vec3 box_dimensions_{};
+    f32 box_canvas_width_ = 1.5f;
 };
 
 }  // namespace zl

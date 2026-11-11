@@ -331,14 +331,15 @@ Rig pose(const HumanLook& look, const HumanMotion& m) {
 
     if (m.tool != HumanTool::None || m.work > 0) {
         const float pwork = fract(m.work_phase);
-        const float swing_angle = pwork < 0.72f ? lerp(-0.8f, 1.20f, smoothstep(0.12f, 0.72f, pwork))
-                                              : lerp(1.20f, -0.8f, smoothstep(0.72f, 1.0f, pwork));
+        const float strike=pwork<0.72f?smoothstep(0.12f,0.72f,pwork):1.0f-smoothstep(0.72f,1.0f,pwork);
+        const float impact_angle=m.tool==HumanTool::Pickaxe?2.05f:1.55f;
+        const float swing_angle=lerp(-0.8f,impact_angle,strike);
         const float angle = lerp(0.35f, swing_angle, saturate(m.work));
         rig.tool_axis = {0, std::sin(angle), std::cos(angle)};
-        rig.tool_grip = {0.10f, 0.32f, 1.15f + 0.12f * std::cos(angle)};
+        rig.tool_grip = {0.0f,0.23f,lerp(1.32f,m.tool==HumanTool::Pickaxe?1.22f:1.16f,strike*saturate(m.work))};
         rig.arm_grip = 1;
         for (int i = 0; i < 2; ++i) {
-            Vec3 target = rig.tool_grip + rig.tool_axis * (i == 0 ? 0.15f : 0.0f);
+            Vec3 target = rig.tool_grip + rig.tool_axis * (i == 0 ? 0.12f : 0.0f);
             if (m.tool == HumanTool::None) target = {i == 0 ? -0.15f : 0.15f, 0.32f + 0.10f * std::sin(pwork*kTau), 1.04f};
             target.x += i == 0 ? -0.025f : 0.025f;
             Vec3 wrist = target;
@@ -413,7 +414,7 @@ public:
     Painter(Figure& figure, const HumanLook& look, f32 heading)
         : figure_(figure), scale_(kTilesPerMetre * look.height), forward_{std::cos(heading), std::sin(heading)}, right_{-std::sin(heading), std::cos(heading)} {}
 
-    void cone(Vec3 a, Vec3 b, f32 ra, f32 rb, Color color, FigureMaterial material, u8 group, u8 flags = 0, f32 roundness = 1.0f) {
+    void cone(Vec3 a, Vec3 b, f32 ra, f32 rb, Color color, FigureMaterial material, u8 group, u8 flags = 0, f32 roundness = 1.0f, Vec3 image_side = {}) {
         if (figure_.parts.size() >= static_cast<size_t>(kMaxFigureParts)) return;
         FigurePart part;
         part.a = place(a);
@@ -425,6 +426,7 @@ public:
         part.group = group;
         part.flags = static_cast<u8>(flags | (group == kFace ? FigurePartFlag::Unshadowed : 0));
         part.roundness = roundness;
+        part.image_side=place(image_side);
         figure_.parts.push_back(part);
     }
 
@@ -467,8 +469,9 @@ void skin(const HumanLook& look, const HumanMotion& m, const Rig& rig, Figure& f
         constexpr u8 tool_group = 25;
         // The full painted cutout follows these 3D endpoints. The renderer
         // samples alpha for silhouette, depth ordering and projected shadow.
-        paint.cone(grip-axis*0.24f,grip+axis*0.72f,0.45f,0.45f,hex(0xFFFFFF),
-                   m.tool==HumanTool::Axe?Mat::ToolAxe:Mat::ToolPickaxe,tool_group);
+        const Vec3 cutting_edge{0,axis.z,-axis.y};
+        paint.cone(grip-axis*0.12f,grip+axis*0.72f,0.42f,0.42f,hex(0xFFFFFF),
+                   m.tool==HumanTool::Axe?Mat::ToolAxe:Mat::ToolPickaxe,tool_group,0,1.0f,cutting_edge*0.42f);
     }
 
     const Color hem = toned(look.tunic, 0.70f);

@@ -71,12 +71,18 @@ silhouette shadows onto slopes, plateaus and water. Transparent canvas pixels,
 painted contact shadows, and tiny ground cover do not become solid casters.
 Terrain and characters receive filtered shadows with cool ambient light.
 Procedural character shadows follow the same sun direction in both styles.
+Low chests and stumps use solid box/cylinder shadow volumes grounded at the terrain
+surface. The chest's receiver depth follows its box surface, keeping the painted
+base in contact with the shadow as its facing or the camera changes.
 
 The light volume includes offscreen casters. Its texel-aligned bounds follow the
 visible terrain and its height; static views reuse the depth map. Panning,
 zooming, Q/E rotation, regeneration and F5 art reload refresh it as needed.
-A 3×3 filter with hardware depth comparison softens the edges. Terrain uses
-receiver-plane correction and a texel-scaled bias; upright sprites use a
+A 3×3 filter with hardware depth comparison softens the edges. Nearby blocker
+depth controls the filter radius, keeping low-object contact edges firm while
+taller shadows soften. Terrain uses receiver-plane correction and a texel-scaled
+bias; painted chests retain their own face lighting and exclude their proxy from
+self-shadow sampling. Upright sprites use a
 separate correction to avoid darkening blades and pebbles on fully lit ground.
 `--no-shadows` disables cast shadows for matched captures and regression checks.
 

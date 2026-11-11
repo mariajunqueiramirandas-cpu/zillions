@@ -225,7 +225,7 @@ simulation can run in tests, tools and (later) a server.
 
 - **Instanced terrain and scenery.** Visible terrain chunks use a height-displaced
   mesh with distance-dependent tessellation; a second draw closes the map edges
-  with rock faces. Scenery uses one instanced draw with 44 bytes per sprite,
+  with rock faces. Scenery uses one instanced draw with 48 bytes per sprite,
   including upright and contact-shadow depth. Quad corners come from `gl_VertexID`.
   With a character, scenery is split before and after its rotated ground depth.
   Painted characters render into a live 64-pixel-per-tile GPU atlas and composite
@@ -237,10 +237,12 @@ simulation can run in tests, tools and (later) a server.
   shadows, and movement use the same isometric camera.
 - **Directional shadows.** A cached 2048² floating-point sun depth map includes
   terrain and alpha-cutout trees, bushes, boulders and deposits, including offscreen
-  casters. Terrain, water and characters receive soft filtered shadows while
+  casters. Chests and stumps use grounded solid shadow volumes. Terrain, water
+  and characters receive filtered shadows with firmer contact edges while
   retaining cool ambient light. Shadow geometry refreshes after camera or art
   changes. A stationary map-only view uses up to three visible draws; refreshing
-  shadows adds two depth draws. `--no-shadows` makes reproducible comparisons.
+  shadows adds two depth draws, plus one for solid props when present.
+  `--no-shadows` makes reproducible comparisons.
 - **Job system.** A persistent thread pool with a blocking `parallel_for`;
   chunks are claimed with a single atomic add.
 - **Determinism.** All randomness comes from seeded hashes and PCG32; noise is

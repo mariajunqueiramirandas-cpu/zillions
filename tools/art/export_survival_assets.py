@@ -54,7 +54,7 @@ def export():
         # Isometric props anchor at the center of their ground footprint,
         # above the nearest bottom corner. Anchoring to the canvas silhouette's
         # lowest pixel makes wide props appear suspended above their shadows.
-        anchor_y={"branch":10,"stump":21,"rubble":12,"chest":27}[name]
+        anchor_y={"branch":10,"stump":21,"rubble":12,"chest":22.5}[name]
         manifest["sprites"].append({"path":path,"size":size,"anchor":[size[0]//2,anchor_y],"source":"source/survival-world.png","source_rect":box,"content_rect":bounds})
     icons=Image.open(ASSETS/"source/survival-icons.png").convert("RGBA")
     for i,name in enumerate(("wood","stone","fiber","rope","axe","pickaxe","chest")):

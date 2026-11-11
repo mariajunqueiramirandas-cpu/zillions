@@ -70,19 +70,28 @@ as the missing-file fallback; normal play reads the image-model PNGs.
 
 The chest has a world facing, independent of the camera. T cycles S/W/N/E while
 placing it. Its long collision footprint rotates with that facing. The renderer
-selects `(camera quarter-turn + world facing) % 4` for both the placed sprite and
-its shadow caster; the preview uses the same selection. The four source views
+selects `(camera quarter-turn + world facing) % 4` for the placed sprite and
+preview. The four source views
 alternate their long-axis diagonal and show the front latch or back hinges as
 appropriate. They are not mirrored copies. All four exports use the same
-48x40 canvas, 34-pixel object width and ground anchor (24,27), preventing size
+48x40 canvas, 34-pixel object width and ground anchor (24,22.5), preventing size
 or position jumps. Anchors mark the center of each footprint, above the nearest
 bottom corner, so wide props sit against their shadows. Future placeable props
 must follow this four-view convention.
 
-Held tools use the generated alpha cutouts attached to endpoints in the
-character's three-dimensional hand frame. Both shafts share the same centerline
-and grip position. Two-bone arm posing keeps the hands attached as the work
-cycle lifts, strikes and recovers. The figure shader samples actual image alpha
+Chests cast shadows from a grounded box rotated with the world facing, independent
+of the camera or painted latch/hinges. The sprite receives shadows and terrain
+depth using that same box surface. Stumps use a tapered cylindrical shadow volume.
+Blocker height controls filtering so low props retain a firm contact edge. Chest
+paintings retain their own face lighting; only external casters add shadow to
+the sprite, avoiding bands from the approximate proxy on the painted surface.
+
+Held tools use generated alpha cutouts on a three-dimensional plane defined by
+the shaft and cutting edge. That plane follows the character's heading and swing,
+so the blade stays aligned with the strike as the camera turns. Both shafts
+share the same centerline and grip position. Two-bone arm posing keeps both
+hands on the shaft through lifting, striking and recovery; the pickaxe swings
+lower to reach stone. The figure shader samples actual image alpha
 for silhouette, depth and shadow, so transparent canvas pixels do not become
 solid geometry or rectangular shadows. Existing body animation stays procedural.
 Small chips and floating gains provide strike feedback. Audio is a later pass.
@@ -106,6 +115,10 @@ repainting assets. No new third-party assets or licenses are introduced here.
 ![Generated axe and camp props](screenshots/survival-tools.png)
 
 ![Four chest facings and all generated ground props](screenshots/survival-props.png)
+
+![Axe striking a tree](screenshots/survival-chopping.png)
+
+![Pickaxe striking stone](screenshots/survival-mining.png)
 
 ## Implementation and validation
 
@@ -131,7 +144,11 @@ placement, tool poses and a complete empty-bag-to-stocked-chest simulation.
 The GPU suite clicks actual HUD hit boxes to craft both tools and a chest,
 splits/returns a held stack, transfers supplies and renders props/tools at all
 four camera angles. It also checks four distinct placed facings, rotated
-colliders, directional previews and transparent tool shadows. Existing terrain
+colliders, directional previews and transparent tool shadows. Shadow checks cover
+ground contact at two elevations, all four camera angles and all four chest
+facings, with matching opposite-facing volumes. Strike captures exercise both
+tools against actual targets; pose checks verify the blade plane and both hands
+through the full cycle across character variants and headings. Existing terrain
 and figure suites remain applicable.
 
 Set `ZL_SURVIVAL_CAPTURE_DIR=/tmp/survival-review` on the survival GPU command to
