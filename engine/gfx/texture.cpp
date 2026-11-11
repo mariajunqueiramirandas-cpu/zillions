@@ -23,6 +23,26 @@ Texture::~Texture() {
     if (id_) glDeleteTextures(1, &id_);
 }
 
+Texture::Texture(Texture&& other) noexcept : id_(other.id_), target_(other.target_), width_(other.width_), height_(other.height_) {
+    other.id_ = 0;
+    other.target_ = 0;
+    other.width_ = other.height_ = 0;
+}
+
+Texture& Texture::operator=(Texture&& other) noexcept {
+    if (this != &other) {
+        if (id_) glDeleteTextures(1, &id_);
+        id_ = other.id_;
+        target_ = other.target_;
+        width_ = other.width_;
+        height_ = other.height_;
+        other.id_ = 0;
+        other.target_ = 0;
+        other.width_ = other.height_ = 0;
+    }
+    return *this;
+}
+
 void Texture::reset(u32 target) {
     if (id_) glDeleteTextures(1, &id_);
     glGenTextures(1, &id_);

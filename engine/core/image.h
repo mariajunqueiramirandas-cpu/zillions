@@ -33,4 +33,8 @@ bool write_png(const char* path, const Image& image);
 // missing or is not a PNG.
 bool read_png(const char* path, Image& image);
 
+// Decodes PNG or JPEG bytes (as embedded in a GLB) to RGBA8 with straight
+// alpha. Returns false, leaving `image` alone, on malformed data.
+bool decode_image(const u8* data, size_t size, Image& image);
+
 }  // namespace zl

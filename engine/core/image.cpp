@@ -11,7 +11,6 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
-#define STBI_ONLY_PNG
 #define STBI_NO_FAILURE_STRINGS
 #include <stb_image.h>
 #if defined(__GNUC__) || defined(__clang__)
@@ -36,6 +35,20 @@ bool read_png(const char* path, Image& image) {
     image = Image(width, height);
     std::memcpy(image.bytes(), data, image.pixels.size() * sizeof(Color));
     stbi_image_free(data);
+    return true;
+}
+
+bool decode_image(const u8* data, size_t size, Image& image) {
+    if (!data || size == 0 || size > static_cast<size_t>(0x7FFFFFFF)) return false;
+    int width = 0, height = 0, channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(data, static_cast<int>(size), &width, &height, &channels, 4);
+    if (!pixels || width <= 0 || height <= 0) {
+        if (pixels) stbi_image_free(pixels);
+        return false;
+    }
+    image = Image(width, height);
+    std::memcpy(image.bytes(), pixels, image.pixels.size() * sizeof(Color));
+    stbi_image_free(pixels);
     return true;
 }
 

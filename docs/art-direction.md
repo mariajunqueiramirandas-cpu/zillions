@@ -70,8 +70,18 @@ Two limits on that:
 - **Only the objects listed here.** The things that define plague-era pictures
   (plague doctors, death carts, pyres, crosses, crows, the dead) are not
   scenery the game has a place for today: the renderer knows only the eleven
-  sprite families below. Do not add them to this batch. They are the motifs
-  the art for the horde and the colony should draw on once those are designed.
+  sprite families below. Do not add them to this sprite batch. They are the
+  motifs the art for the horde and the colony should draw on once those are
+  designed. The plague doctor is the exception: the player is a skinned model
+  in the same palette, not a scenery sprite. See [the plague doctor
+  notes](plague-doctor.md).
+
+The player model, axe and pickaxe are the only 3D assets. Their base-colour
+textures are scans; the renderer lifts the darkest texels, lights them with the
+same warm sun and a lifted warm ambient as the terrain, adds a rim and a soft
+contact shadow, and cuts the legs at a ford's waterline. Keep future player
+models in the same palette and at the same scale (1.70 m tall, 0.8 tiles per
+metre).
 
 The paintings are a reference for mood, light and palette. Do not copy any
 specific artwork, and do not imitate the look of *They Are Billions* (which

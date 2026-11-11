@@ -8,6 +8,11 @@ add_library(zl_core STATIC
 target_include_directories(zl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(zl_core PUBLIC Threads::Threads PRIVATE stb zl_options)
 
+# HTTP(S) transport for external services. Built without the app as well so the
+# headless tests can exercise the OpenRouter client.
+add_library(zl_net STATIC net/http.cpp)
+target_link_libraries(zl_net PUBLIC zl_core PRIVATE CURL::libcurl zl_options)
+
 if(ZL_BUILD_APP)
   set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
   set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)

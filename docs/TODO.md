@@ -32,7 +32,7 @@ review; remaining unchecked items are future artwork polish or game features.
 - [x] Keep export manual when source paintings change. Normal builds consume
       committed PNGs; headless tests check decoding, packing and fallback.
 
-## Character (complete)
+## Procedural human fallback (complete)
 
 The playable human, movement and rendering review is complete. Reproduction
 commands, pose and scene images, test coverage and benchmark measurements are
@@ -117,15 +117,43 @@ in `docs/character.md`.
       and visual collision impulses. Verify joint continuity and settling.
 - [x] Re-record the demo and add an optional joint overlay for frame reviews.
 
+## Plague doctor (complete)
+
+The player is now the skinned plague doctor; the procedural human above is the
+missing-model fallback.
+
+- [x] `game/asset/gltf.cpp`: GLB/glTF 2.0 loader for buffers, accessors, nodes,
+      skins, LINEAR/STEP clips and embedded base-colour textures; 4096² sources
+      downsampled to 1024²; errors leave the model empty.
+- [x] `game/actor/plague.cpp`: Idle/Walking/Running selection with a 0.18 s
+      crossfade, measured playback references (1.32 / 4.73 m/s), hammer and
+      slash work clips driven by the survival strike, a 0.10 s strike-wrap blend
+      and the normalized right-hand anchor.
+- [x] `game/render/model_renderer.cpp`: skinned vertex shader, isometric
+      projection and depth, sun shadow map, waterline cut, contact shadow,
+      far-zoom marker and the 3D axe/pickaxe attached to the right hand.
+- [x] Scene integration: the model draws between the northern and southern
+      scenery, writes depth, fades foreground trees around its bounds and keeps
+      the marker above the southern scenery.
+- [x] Fallback: a missing GLB logs the reason and draws the procedural human;
+      look/hood/style controls and the character sheet stay on that path.
+- [x] Tests: `zl_model_tests`, `zl_plague_tests` and `zl_model_render_tests`;
+      the headless suite passes 6/6.
+- [x] Docs: `docs/plague-doctor.md`, README, design, survival, art direction and
+      the character fallback notes.
+- [x] Bench: 1.35–1.45 ms/frame at 800×600 on an AMD RX 560, three draw calls.
+
 ## Game
 
 - [x] First survival economy: reachable hand-gathering supplies, finite trees
-      and stone nodes, stack inventory, rope/tools/chest recipes, hand-held
-      procedural tools, harvesting poses, camp storage and a gameplay HUD.
+      and stone nodes, stack inventory, rope/tools/chest recipes, 3D held tools
+      on the plague doctor (procedural cutouts as the fallback), harvesting
+      poses, camp storage and a gameplay HUD.
       Art sources, screenshots and validation are in `docs/survival.md`.
 - [ ] Save/load of the mutable economy and world state.
-- [x] Image-model world props, inventory icons and held-tool cutouts; four chest
-      views with placement rotation, matching preview, collision and shadows.
+- [x] Image-model world props, inventory icons and held-tool cutouts (fallback);
+      four chest views with placement rotation, matching preview, collision and
+      shadows.
 - [ ] Harvesting audio and further art/animation polish.
 
 - [ ] Buildings, units, the horde and combat. Their art is out of scope until

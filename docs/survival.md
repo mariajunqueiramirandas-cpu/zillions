@@ -59,7 +59,7 @@ sheets and their exact prompts are retained in `assets/source/survival-*`:
 | Two fallen branch arrangements, stump, rubble | `assets/sprites/branch_0..1.png`, `stump_0.png`, `rubble_0.png` |
 | Four genuinely distinct views of one chest | `assets/sprites/chest_0..3.png` |
 | Wood, stone, fiber, rope, axe, pickaxe, chest icons | `assets/icons/*.png` |
-| Upright axe and pickaxe cutouts with aligned shafts | `assets/tools/*.png` |
+| Upright axe and pickaxe cutouts with aligned shafts (procedural fallback) | `assets/tools/*.png` |
 
 `tools/art/export_survival_assets.py` only slices, aligns and downsamples those
 generated images; it does not synthesize artwork. `assets/survival-manifest.json`
@@ -86,21 +86,28 @@ Blocker height controls filtering so low props retain a firm contact edge. Chest
 paintings retain their own face lighting; only external casters add shadow to
 the sprite, avoiding bands from the approximate proxy on the painted surface.
 
-Held tools use generated alpha cutouts on a three-dimensional plane defined by
-the shaft and cutting edge. That plane follows the character's heading and swing,
-so the blade stays aligned with the strike as the camera turns. Both shafts
-share the same centerline and grip position. Two-bone arm posing keeps both
-hands on the shaft through lifting, striking and recovery; the pickaxe swings
-lower to reach stone. The figure shader samples actual image alpha
-for silhouette, depth and shadow, so transparent canvas pixels do not become
-solid geometry or rectangular shadows. Existing body animation stays procedural.
-Small chips and floating gains provide strike feedback. Audio is a later pass.
+The plague doctor holds the 3D axe and pickaxe from `assets/models` in its right
+hand. The tool follows the hand bone through `Heavy_Hammer_Swing`; the pickaxe
+uses the same overhead swing and hand gathering uses `Right_Hand_Sword_Slash`.
+The renderer moves the tool's grip to the origin, scales it to about 0.65 m and
+points the head up; the tool is drawn after the body with the scene depth, so
+the hand occludes the handle. See [the plague doctor notes](plague-doctor.md).
+
+The generated alpha cutouts remain the procedural fallback's held tools. They
+use a three-dimensional plane defined by the shaft and cutting edge, follow the
+character's heading and swing, and keep both hands on the shaft through the
+two-bone arm posing; the pickaxe swings lower to reach stone. The figure shader
+samples image alpha for silhouette, depth and shadow, so transparent canvas
+pixels do not become solid geometry or rectangular shadows. The fallback's body
+animation stays procedural. Small chips and floating gains provide strike
+feedback. Audio is a later pass.
 
 Further buildings should begin with an image-model concept and four consistent
 views, reviewed in the scene before producing variants. Colonists can reuse the
-rig; zombie types need distinct silhouettes and animation cycles. Measure the
-cost of live rendering versus sprite baking before producing horde animation
-sets.
+rig; zombie types need distinct silhouettes and animation cycles. The player's
+plague doctor is one live skinned mesh at 1.35–1.45 ms per frame (800×600, AMD
+RX 560); the horde still needs sprite baking or a lower-detail variant before
+thousands of units move.
 
 For each group, check palette, matching light, transparency, anchors, shadows,
 all four camera angles and readability at 8/16/32/64 pixels per tile. Keep source
@@ -135,6 +142,7 @@ ctest --test-dir build --output-on-failure
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./build/tests/zl_survival_render_tests
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./build/tests/zl_render_tests
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./build/tests/zl_figure_render_tests
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./build/tests/zl_model_render_tests
 ```
 
 The survival suite checks stack conservation, split/transfer behavior, recipe
@@ -148,11 +156,15 @@ colliders, directional previews and transparent tool shadows. Shadow checks cove
 ground contact at two elevations, all four camera angles and all four chest
 facings, with matching opposite-facing volumes. Strike captures exercise both
 tools against actual targets; pose checks verify the blade plane and both hands
-through the full cycle across character variants and headings. Existing terrain
-and figure suites remain applicable.
+through the full cycle across character variants and headings. Those pose checks
+exercise the procedural fallback; `zl_model_render_tests` covers the plague
+doctor's skinned mesh, tool and waterline. Existing terrain and figure suites
+remain applicable.
 
 Set `ZL_SURVIVAL_CAPTURE_DIR=/tmp/survival-review` on the survival GPU command to
-write the review frames. Tool poses can also be inspected independently:
+write the review frames. Tool poses can also be inspected independently; with
+the plague doctor loaded this poses the 3D model and axe, and with the fallback
+it poses the painted cutout:
 
 ```sh
 ./build/game/zillions --seed 7 --size 256 --resolution 1 --zoom 180 \

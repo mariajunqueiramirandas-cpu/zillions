@@ -9,9 +9,10 @@ pour in from the map edges. The terrain is the defence: cliffs, rivers and
 mountains funnel the horde through ramps, fords and passes, and the game is
 about choosing which chokepoints to hold. See [the design notes](docs/design.md).
 
-The engine, map generator, playable human and first gathering economy are built.
-Gather wood, stone and fiber, craft tools, cut trees, mine stone and establish a
-storage chest. Colony workers, buildings and the horde are still to build.
+The engine, map generator, playable plague doctor and first gathering economy
+are built. Gather wood, stone and fiber, craft tools, cut trees, mine stone and
+establish a storage chest. Colony workers, buildings and the horde are still to
+build.
 
 The world uses a 2:1 isometric view with displaced terrain, raised plateaus,
 sloping ramps, depth-tested scenery, and soft cast shadows from a world-space sun. **Q / E** turn the view by 90° around
@@ -32,32 +33,48 @@ Files live in `assets/ground` and `assets/sprites`, and the
 tiled ground proofs. The screenshots on this page are taken with that art.
 
 The gathering system adds eight image-model world sprites (including four chest
-views), seven painted item icons and two held-tool cutouts. Generated masters,
-exact prompts and export metadata are retained in `assets/source` and
-`assets/survival-manifest.json`; see [the survival art notes](docs/survival.md#art-and-animation).
+views), seven painted item icons and two held-tool cutouts for the procedural
+fallback. Generated masters, exact prompts and export metadata are retained in
+`assets/source` and `assets/survival-manifest.json`; see
+[the survival art notes](docs/survival.md#art-and-animation).
+
+The player is a skinned glTF model and the tools are static glTF meshes in
+`assets/models`: a 24-joint plague doctor with five authored clips, and a 3D
+axe and pickaxe that hang from its right hand. The loader, animation state
+machine and renderer are described in [the plague doctor notes](docs/plague-doctor.md).
+The painted human remains as the missing-model fallback.
 
 ![Generated ground textures](docs/art/ground-swatches.png)
 
 ## The player's character
 
-Walk a human character around the map with WASD or the arrows; Shift sprints
+Walk the plague doctor around the map with WASD or the arrows; Shift sprints
 and Ctrl strolls. Space switches to management mode: the camera pulls back into
 a city-builder view that pans when the cursor nears the window borders (or with
 WASD / right-drag), while the character patrols and explores the surrounding
 area autonomously. Pressing Space again swoops the camera back to the character.
 Trees in front of the character fade, cliffs and deep water block movement, and
-fords slow the character and cover its feet with water and ripples.
+fords slow the character and cover its legs with water.
 
-The figure is built and animated entirely in code, then painted into a small
-transparent texture every frame and drawn as a sprite. Soft filtering, flatter
-shading and quieter detail match the terrain. A jointed skeleton drives the
-clothes, face, hair, hood and belt gear. C chooses another seeded look, X raises
-the hood, and 1 restores the hero. F6 compares the painted sprite with the
-smooth procedural drawing; animation stays live in both styles.
-The [character notes](docs/character.md) explain the rig, gait and shader and
-record the visual and performance checks.
+The player is a skinned glTF model loaded from
+`assets/models/plague_character.glb`. Five authored clips drive it: Idle,
+Walking and Running follow the player's speed, `Heavy_Hammer_Swing` chops with
+the crafted axe or pickaxe, and `Right_Hand_Sword_Slash` is the hand-gathering
+swipe. The 3D tools (`assets/models/axe.glb`, `pickaxe.glb`) hang from the right
+hand and follow the swing. The character is lit by the world sun, receives the
+cached shadow map, sinks below ford water, casts a soft contact shadow and keeps
+the far-zoom marker. The animation state machine crossfades locomotion, scales
+playback to each clip's measured stride speed and blends across repeated
+strikes. See [the plague doctor notes](docs/plague-doctor.md).
 
-![Recorded player demo: idle, walk, turn, jog, sprint and stop](docs/character/player-demo.gif)
+The procedural human is still in the build as the missing-model fallback: it is
+built and painted in code, with seeded looks, a hood and painted/smooth styles.
+C, X, 1, F6, `--look`, `--hood`, `--character-style` and `--character-sheet`
+apply to that fallback; with the model loaded the player's body is fixed to the
+hero's dimensions. The [character notes](docs/character.md) document the
+fallback rig, gait and shader.
+
+![Recorded plague doctor demo: idle, walk, jog, sprint and stop](docs/character/plague-demo.gif)
 
 ## Gathering and the first camp
 
@@ -78,11 +95,12 @@ implemented. See [the survival notes](docs/survival.md) for recipes, art and che
 
 ## Building
 
-Needs CMake 3.21+, a C++20 compiler and OpenGL 3.3. GLFW and stb are fetched at
-configure time. On Linux, GLFW also needs the X11 or Wayland development
-packages (`libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-libxkbcommon-dev libgl-dev` on Debian/Ubuntu; add `-DGLFW_BUILD_WAYLAND=OFF` if
-you have no Wayland headers).
+Needs CMake 3.21+, a C++20 compiler and OpenGL 3.3. GLFW, stb, libcurl and
+nlohmann/json are fetched at configure time. On Linux, GLFW also needs the X11
+or Wayland development packages (`libxrandr-dev libxinerama-dev libxcursor-dev
+libxi-dev libxkbcommon-dev libgl-dev` on Debian/Ubuntu; add
+`-DGLFW_BUILD_WAYLAND=OFF` if you have no Wayland headers). libcurl's OpenSSL
+backend needs the OpenSSL development package (`libssl-dev` on Debian/Ubuntu).
 
 ```sh
 cmake -S . -B build
@@ -91,8 +109,17 @@ cmake --build build -j
 ctest --test-dir build        # headless tests
 ```
 
+On a multi-config generator (Visual Studio), the binaries are under
+`build/game/Release` and `build/tests/Release`; pass `-C Release` to `ctest`.
+The headless suite includes `zl_model_tests` (GLB loader) and `zl_plague_tests`
+(animation, measured stride speeds and the strike-wrap blend). The GPU model
+test is opt-in and needs a display:
+`./build/tests/Release/zl_model_render_tests.exe`.
+
 `-DZL_BUILD_APP=OFF` builds only the headless parts (generator, tests, tools),
-which need no windowing system or GPU.
+which need no windowing system or GPU. The build also includes a standalone
+OpenRouter client for future model-driven features; gameplay does not use it
+yet. See [the OpenRouter notes](docs/openrouter.md).
 
 ## Running
 
@@ -122,7 +149,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | Space | switch between character-follow mode and management mode (autonomous character + city-builder camera) |
 | window borders / right- or middle-drag | pan in management mode |
 | mouse wheel | zoom about the character while following, or the cursor in management mode |
-| C / X / 1 | new seeded look / toggle hood / restore the hero |
+| C / X / 1 | fallback only: new seeded look / toggle hood / restore the hero |
 | Ctrl+R | reset the session with the next seed (R alone in map-only mode) |
 | F / H | frame the whole map (in management mode) / centre on the character (start area with `--no-character`) |
 | G | tile grid |
@@ -130,7 +157,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | F2 | save a screenshot |
 | F3 | inspect object collision footprints and height volumes |
 | F5 | reload ground textures and sprites without changing the map or camera |
-| F6 | switch the character between painted sprite and smooth rendering |
+| F6 | fallback only: painted sprite or smooth rendering |
 
 The painted art is read from `--assets DIR`, or by default from `./assets`, or
 failing that from the `assets` folder of the source tree the binary was built
@@ -153,16 +180,22 @@ preview, `--bench` times generation.
 `--no-character` opens the map viewer with a free camera. `--player X Y`
 places the character on nearby walkable ground. Screenshot poses use heading
 in degrees (0 east, 90 south), speed in metres per second and stride phase in
-0..1; water depth is taken from the tile. `--look N` selects a repeatable person
-(0 restores the hero), and `--hood` raises the hood. `--character-sheet FILE`
-writes 64 poses and looks; `--zoom 256` makes a close-up review sheet.
-`--character-style painted` is the default; `smooth` draws the underlying
-procedural shapes directly at the screen resolution.
+0..1; water depth is taken from the tile. `--tool axe|pickaxe --work-phase P`
+poses the 3D tool and the matching swing; `--speed` and `--phase` select and
+phase the locomotion clip. `--look N` (0 restores the hero), `--hood`,
+`--character-sheet FILE` and `--character-style painted|smooth` apply to the
+procedural fallback; `--character-sheet` writes 64 poses and looks, and
+`--zoom 256` makes a close-up review sheet.
+
+The models are read from `--assets DIR`, or the same automatic `assets` root as
+the painted art. If `models/plague_character.glb` cannot be loaded, the log says
+why and the procedural human is drawn instead; the axe and pickaxe are optional
+and only affect the tool in the plague doctor's hand.
 
 `zillions --bench` times the map renderer off-screen, measures the procedural
-figure in both styles at 6, 64 and 256 pixels per tile (including pose,
-upload, painting and composition),
-then stress-tests the sprite batch with 10,000 to 250,000 moving sprites.
+figure in both styles and the skinned plague doctor with its axe at 64 and 256
+pixels per tile, then stress-tests the sprite batch with 10,000 to 250,000
+moving sprites.
 
 The overlays draw gameplay data per tile, exactly as the simulation sees it.
 Height shows level 0 in blue, 1 in yellow, 2 in red, ramps in white and a black
@@ -175,7 +208,9 @@ line on every border a cliff blocks:
 The debug recorder generates a repeatable demo through the actual player
 controller and renderer: idle, profile walk, turn towards the camera, jog,
 sprint away, then stop. The default is an eight-second looping GIF, with
-captions showing the stage, time, gait speed and stride phase.
+captions showing the stage, time, gait speed and stride phase. The live player
+is the plague doctor; the capture shows its locomotion clips. The tool swings
+are in the stills and in [the plague doctor notes](docs/plague-doctor.md).
 
 ```sh
 python3 -m pip install -r tools/requirements-debug.txt
@@ -184,11 +219,14 @@ python3 tools/record_demo.py out/player-demo.gif
 
 It writes a JSON state log beside the GIF. `--style smooth`, `--look N`,
 `--hood`, `--zoom`, `--width`, `--height`, `--fps`, `--seconds` and `--colors`
-make targeted reviews easy. `--no-captions` writes the scene alone;
-`--rig-overlay` shows the actual arm/leg joints in cyan and orange;
+make targeted reviews easy; the style, look and hood options apply to the
+procedural fallback. `--no-captions` writes the scene alone; `--rig-overlay`
+shows the procedural fallback's arm/leg joints in cyan and orange;
 `--keep-frames out/demo-frames` retains the source PNGs in a new or empty
-directory. Pass `--binary PATH` for another build. Run `--help` for limits.
-The state log includes the projected joints as well as movement and pose blends.
+directory. Pass `--binary PATH` for another build; on a multi-config build use
+`--binary build/game/Release/zillions.exe`. Run `--help` for limits.
+The state log's `rig` entries are the fallback's projected joints, not the GLB
+skeleton; the `style` field reports `plague` when the model is active.
 
 The simulation always runs at 60 Hz and capture time is independent of render
 speed. A shared GIF palette keeps colours stable; delays preserve the clip's
@@ -206,20 +244,24 @@ For PNGs without GIF encoding, use the game directly:
 
 ```
 engine/core      types, RNG and hashing, job system, clock, images
-engine/math      vectors, simplex / fBm / ridged noise
+engine/math      vectors, quaternions/matrices, simplex / fBm / ridged noise
+engine/net       blocking HTTP(S) transport (libcurl)
 engine/platform  window, OpenGL context, input (GLFW)
 engine/gfx       shaders, textures, colour/depth targets, isometric and 2D cameras, sprite batch
 game/world       tile map, map generator, CPU preview        (headless)
-game/actor       human rig, gait, looks and player controller (headless)
-game/render      terrain and figure shaders, relief, art loading and placeholders
+game/asset       glTF/GLB loader, skinning data and texture decode (headless)
+game/actor       plague doctor animation, human fallback rig, gait and player controller (headless)
+game/ai          OpenRouter chat client
+game/render      terrain, figure and skinned-model shaders, relief, art loading and placeholders
 game/app         the viewer executable
 tools/           zl_mapgen, artwork export, GIF demo recorder
 tests/           headless, GPU and GIF encoder checks
-assets/          painted ground textures and sprites, and their source sheets
+assets/          painted ground textures and sprites, their source sheets, and models/
 ```
 
-`zl_core`, `zl_world` and `zl_actor` have no dependency on a window or GPU, so the
-simulation can run in tests, tools and (later) a server.
+`zl_core`, `zl_world`, `zl_assets` and `zl_actor` have no dependency on a window
+or GPU, so the simulation and the model loader can run in tests, tools and
+(later) a server.
 
 ## Engine notes
 
@@ -228,8 +270,16 @@ simulation can run in tests, tools and (later) a server.
   with rock faces. Scenery uses one instanced draw with 48 bytes per sprite,
   including upright and contact-shadow depth. Quad corners come from `gl_VertexID`.
   With a character, scenery is split before and after its rotated ground depth.
-  Painted characters render into a live 64-pixel-per-tile GPU atlas and composite
-  between those slices; smooth mode uses a direct figure pass instead.
+  The plague doctor is a skinned mesh drawn between those slices and writes
+  depth; the painted procedural figure remains the fallback and composites from
+  a live 64-pixel-per-tile atlas.
+- **Skinned player model.** `game/asset/gltf.cpp` loads the GLB, skin and five
+  animation clips; `game/actor/plague.cpp` blends locomotion and work clips and
+  writes 24 skinning matrices; `game/render/model_renderer.cpp` draws the
+  character and the active tool with the isometric projection, the scene's depth
+  and shadow map, a waterline cut, a contact shadow and the far-zoom marker.
+  The pass is three draw calls, measured at 1.35–1.45 ms per frame at 800×600
+  on an AMD RX 560. See [the plague doctor notes](docs/plague-doctor.md).
 - **Height and occlusion.** A full-precision height texture drives geometry,
   scenery anchors, and terrain picking. Live windows and screenshot targets both
   have depth buffers. Four scenery orders handle camera rotation, and terrain
@@ -239,7 +289,9 @@ simulation can run in tests, tools and (later) a server.
   terrain and alpha-cutout trees, bushes, boulders and deposits, including offscreen
   casters. Chests and stumps use grounded solid shadow volumes. Terrain, water
   and characters receive filtered shadows with firmer contact edges while
-  retaining cool ambient light. Shadow geometry refreshes after camera or art
+  retaining cool ambient light. The skinned model receives the same map and
+  adds a soft contact shadow; it does not refresh the cached caster pass.
+  Shadow geometry refreshes after camera or art
   changes. A stationary map-only view uses up to three visible draws; refreshing
   shadows adds two depth draws, plus one for solid props when present.
   `--no-shadows` makes reproducible comparisons.
