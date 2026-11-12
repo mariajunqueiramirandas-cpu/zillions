@@ -26,8 +26,16 @@ the terrain at the centre of the screen. See the [isometric viewer notes](docs/i
 
 ## Generated artwork
 
-The viewer draws the map with painted art: seven image-model ground textures
-and forty scenery sprites following the [art brief](docs/art-direction.md).
+The world now uses 15 Meshy-generated 3D scenery families, including
+trees, outcrops, ground cover and chests. The default map is 4096 × 4096 tiles
+(5.12 km per side), with a human-sized player beneath 8–11 m trees. See the
+[world scale and scenery notes](docs/world-scale.md) for the asset inventory,
+generation provenance, physical dimensions and rendering checks.
+
+The viewer draws the map with detailed CC0 ground materials and painted art:
+seven 1K ground textures, triplanar mountain rock with height and roughness
+detail, and forty scenery sprites following the [art brief](docs/art-direction.md).
+See [terrain materials](docs/terrain-materials.md) for sources and rendering.
 Files live in `assets/ground` and `assets/sprites`, and the
 [art showcase](docs/art/showcase.md) has contact sheets at four zoom levels and
 tiled ground proofs. The screenshots on this page are taken with that art.
@@ -141,7 +149,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 |---|---|
 | hold left mouse | gather the resource near the cursor's ground position, while in reach |
 | I / B | inventory and hand crafting; B switches storage to crafting |
-| T during chest placement | rotate world facing; four generated sprites also follow Q/E camera rotation |
+| T during chest placement | rotate the chest mesh's world facing; Q/E rotates the view |
 | left / right click a stack | pick up or place a stack / split or place one item |
 | Shift-click | transfer a stack to/from an open chest; queue up to five crafts |
 | Esc | close panel, cancel chest placement, otherwise quit |
@@ -157,7 +165,7 @@ zillions [--seed N] [--size N] [--resolution 1|2|4] [--width W --height H] [--no
 | V | cycle debug overlay: height levels, passability |
 | F2 | save a screenshot |
 | F3 | inspect object collision footprints and height volumes |
-| F5 | reload ground textures and sprites without changing the map or camera |
+| F5 | reload models, ground textures and fallback sprites |
 | F6 | fallback only: painted sprite or smooth rendering |
 
 The painted art is read from `--assets DIR`, or by default from `./assets`, or
@@ -266,10 +274,16 @@ or GPU, so the simulation and the model loader can run in tests, tools and
 
 ## Engine notes
 
+World lighting now shares one linear-space sun/sky model and display curve.
+The player and tools use their authored metallic/roughness maps, and mesh
+shadows retain contact detail with softer distant edges. See
+[the lighting notes](docs/lighting.md) for settings and regression checks.
+
 - **Instanced terrain and scenery.** Visible terrain chunks use a height-displaced
   mesh with distance-dependent tessellation; a second draw closes the map edges
-  with rock faces. Scenery uses one instanced draw with 48 bytes per sprite,
-  including upright and contact-shadow depth. Quad corners come from `gl_VertexID`.
+  with rock faces. Generated scenery uses shared GLB meshes and instanced draws,
+  culled through 32-tile spatial buckets. Missing models retain the painted
+  sprite path and its upright/contact-shadow depth.
   With a character, scenery is split before and after its rotated ground depth.
   The plague doctor is a skinned mesh drawn between those slices and writes
   depth; the painted procedural figure remains the fallback and composites from
@@ -323,9 +337,10 @@ do different things:
   finer grid: every pass, ford and plateau is more tiles across, so more
   buildings and units fit in the same place.
 
-The default is 512 × 512 tiles at 2 tiles per world unit. The same seed at
-`--size 256 --resolution 1` or `--size 1024 --resolution 4` is the same
-geography at half or twice the detail. Resolution must be 1, 2 or 4.
+The default is 4096 × 4096 tiles at 2 tiles per world unit, 64 times the old
+default's area. Resolution must be 1, 2 or 4. As a smaller comparison,
+`--size 256 --resolution 1`, `--size 512 --resolution 2` and
+`--size 1024 --resolution 4` describe the same geography at different detail.
 
 Sizing everything in world units would leave a fine grid empty: the big
 features sit many tiles apart with bare ground between them. So a second layer
@@ -338,7 +353,7 @@ Noise is evaluated once per world unit and interpolated up to the tile grid,
 and the relief texture is laid out in world units too, so a finer grid costs
 far less than its tile count suggests.
 
-A 1024 × 1024 map at the default resolution, four times the area of the default:
+A 1024 × 1024 map at the default resolution, one-sixteenth the new default's area:
 
 ![A 1024x1024 map](docs/screenshots/map-1024.jpg)
 
@@ -361,18 +376,21 @@ A 1024 × 1024 map at the default resolution, four times the area of the default
    percentiles. Ledges too narrow to use, including the thin skirts that
    would otherwise ring every mountain, are lowered, and the start area is
    kept on a single level.
-7. **Terrain**: beaches along lakes, forest in groves biased to wet ground,
-   dry ground interleaved with turf, scree at the foot of mountains.
+7. **Terrain and biomes**: beaches along lakes, regional woods containing
+   smaller groves and clearings, dry ground interleaved with turf, scree at
+   mountain feet. Continuous woodland, meadow, scrub and rock concentrations
+   control both ground blending and scenery density.
 8. **Small features**: ponds, boulder outcrops, stands of trees and lone
    trees, scattered per tile (see above).
 9. **Fords**: shallow crossings on narrow river reaches.
-10. **Ore**: stone, iron and gold where mountains meet open ground, richer ores
+10. **Ore**: denser stone, iron and gold districts across foothills, richer ores
    further out; stone and iron are guaranteed near the start.
 11. **Ramps**: slopes three world units wide cut into straight stretches of
     cliff, spaced well apart.
 12. **Connectivity**: any sizeable region the colony cannot reach is joined by
     the cheapest cut (a ford, a pass, a gap in the trees or a ramp).
-13. **Derived data**: walkable/buildable flags, water depth, statistics.
+13. **Derived data**: walkable/buildable flags, water depth, statistics, then
+    spaced trees and clustered understory with gradual biome transitions.
 
 ### Height
 

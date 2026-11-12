@@ -649,8 +649,9 @@ const char* ground_file(Terrain terrain) {
 
 // Reads every ground texture into its layer of `layers`. All or nothing: on
 // any problem `layers` is left untouched.
-bool load_ground(const std::string& dir, i32 size, std::vector<Image>& layers) {
+bool load_ground(const std::string& dir, i32& size, std::vector<Image>& layers) {
     std::vector<Image> loaded(layers.size());
+    i32 shared_size=0;
     for (int t = 0; t < kTerrainCount; ++t) {
         const char* name = ground_file(static_cast<Terrain>(t));
         if (!name) continue;
@@ -660,8 +661,9 @@ bool load_ground(const std::string& dir, i32 size, std::vector<Image>& layers) {
             ZL_LOG("art: cannot read %s; drawing the ground in code", path.c_str());
             return false;
         }
-        if (image.width != size || image.height != size) {
-            ZL_LOG("art: %s is %dx%d, expected %dx%d; drawing the ground in code", path.c_str(), image.width, image.height, size, size);
+        if(!shared_size)shared_size=image.width;
+        if (image.width != shared_size || image.height != shared_size || shared_size<256 || shared_size>2048 || (shared_size&(shared_size-1))) {
+            ZL_LOG("art: %s has inconsistent ground dimensions; drawing the ground in code", path.c_str());
             return false;
         }
         for (Color& c : image.pixels) c.a = 255;
@@ -669,7 +671,29 @@ bool load_ground(const std::string& dir, i32 size, std::vector<Image>& layers) {
     for (size_t t = 0; t < loaded.size(); ++t) {
         if (loaded[t].width > 0) layers[t] = std::move(loaded[t]);
     }
+    size=shared_size;
     return true;
+}
+
+// Preserve the frequency and seed of procedural shader data when authored
+// materials have more pixels. Filtering wraps across the same periodic seam.
+Image resize_shader_data(const Image& source,i32 size) {
+    if(source.width==size)return source;
+    Image result(size,size);
+    const f32 scale=static_cast<f32>(source.width)/static_cast<f32>(size);
+    for(i32 y=0;y<size;++y)for(i32 x=0;x<size;++x) {
+        const f32 px=(static_cast<f32>(x)+0.5f)*scale-0.5f,py=(static_cast<f32>(y)+0.5f)*scale-0.5f;
+        const i32 ix=static_cast<i32>(std::floor(px)),iy=static_cast<i32>(std::floor(py));
+        const f32 fx=px-static_cast<f32>(ix),fy=py-static_cast<f32>(iy);
+        const auto at=[&](i32 sx,i32 sy){return source.at((sx+source.width)%source.width,(sy+source.height)%source.height);};
+        const Color a=at(ix,iy),b=at(ix+1,iy),c=at(ix,iy+1),d=at(ix+1,iy+1);
+        const auto channel=[&](u8 Color::*field) {
+            return static_cast<u8>(lerp(lerp(static_cast<f32>(a.*field),static_cast<f32>(b.*field),fx),
+                                        lerp(static_cast<f32>(c.*field),static_cast<f32>(d.*field),fx),fy)+0.5f);
+        };
+        result.at(x,y)={channel(&Color::r),channel(&Color::g),channel(&Color::b),channel(&Color::a)};
+    }
+    return result;
 }
 
 // Reads every sprite, in sprite_items() order, and premultiplies its alpha.
@@ -753,7 +777,8 @@ TerrainArt load_terrain_art(JobSystem& jobs, const char* asset_dir, u32 seed) {
     TerrainArt art;
     const std::string dir = asset_dir ? asset_dir : "";
 
-    const i32 ground_size = kArtTilePixels * kGroundRepeatTiles;
+    const i32 procedural_size = kArtTilePixels * kGroundRepeatTiles;
+    i32 ground_size=procedural_size;
     art.ground.resize(static_cast<size_t>(kTerrainCount) + 1);
     art.painted_ground = !dir.empty() && load_ground(dir, ground_size, art.ground);
     // Whatever did not come from a file is drawn here. Every layer is
@@ -761,10 +786,20 @@ TerrainArt load_terrain_art(JobSystem& jobs, const char* asset_dir, u32 seed) {
     jobs.parallel_for(kTerrainCount + 1, 1, [&](i32 begin, i32 end) {
         for (i32 t = begin; t < end; ++t) {
             Image& layer = art.ground[static_cast<size_t>(t)];
-            if (t == kNoiseLayer) layer = make_noise_layer(ground_size, seed + 4242u);
-            else if (layer.width == 0) layer = make_ground(static_cast<Terrain>(t), ground_size, seed + static_cast<u32>(t) * 977u);
+            if (t == kNoiseLayer) layer = resize_shader_data(make_noise_layer(procedural_size,seed+4242u),ground_size);
+            else if (layer.width == 0) layer = resize_shader_data(make_ground(static_cast<Terrain>(t),procedural_size,seed+static_cast<u32>(t)*977u),ground_size);
         }
     });
+    art.mountain_parameters=Image(1,1,{255,235,0,255});
+    art.mountain_height=Image(1,1,{128,128,128,255});
+    if(art.painted_ground) {
+        Image parameters,height;
+        if(read_png((dir+"/ground/mountain_arm.png").c_str(),parameters) &&
+           read_png((dir+"/ground/mountain_height.png").c_str(),height) &&
+           parameters.width==ground_size && parameters.height==ground_size && height.width==ground_size && height.height==ground_size) {
+            art.mountain_parameters=std::move(parameters);art.mountain_height=std::move(height);
+        }
+    }
 
     const std::vector<SpriteItem> items = sprite_items();
     std::vector<Image> images;

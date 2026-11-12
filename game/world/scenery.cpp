@@ -70,6 +70,11 @@ bool scenery_blocks(SceneryKind kind) {
            kind == SceneryKind::Iron || kind == SceneryKind::Gold || kind == SceneryKind::Chest;
 }
 
+f32 scenery_heading(const SceneryObject& object) {
+    return object.kind == SceneryKind::Chest ? static_cast<f32>(object.facing) * 1.5707963268f
+        : hash_to_unit(hash32(object.variant)) * 6.283185307f;
+}
+
 f32 collision_floor(const TileMap& map, Vec2 position) {
     const i32 x = static_cast<i32>(std::floor(position.x)), y = static_cast<i32>(std::floor(position.y));
     if (!map.in_bounds(x, y) || map.level.empty()) return 0.0f;
@@ -110,18 +115,13 @@ void build_colliders(Scenery& scene, const TileMap& map) {
     for (u32 i = 0; i < static_cast<u32>(scene.objects.size()); ++i) {
         const SceneryObject& object = scene.objects[i];
         if (!object.active || !scenery_blocks(object.kind)) continue;
-        const bool tree = object.kind == SceneryKind::Broadleaf || object.kind == SceneryKind::Conifer;
-        f32 radius = object.kind == SceneryKind::Conifer ? 0.12f : 0.15f;
-        f32 half_length = 0.0f, height = object.kind == SceneryKind::Conifer ? 2.5f : 2.3f;
-        if (!tree) {
-            const bool boulder = object.kind == SceneryKind::Boulder;
-            const u32 variant = object.variant % (boulder ? 4u : 3u);
-            radius = (boulder ? 0.35f : 0.32f) + 0.02f * static_cast<f32>(variant % 2);
-            half_length = (boulder && variant >= 2) ? 0.24f : 0.18f;
-            height = boulder ? 0.85f : 0.70f;
-        }
-        if (object.kind == SceneryKind::Chest) { radius = 0.33f; half_length = 0.18f; height = 0.65f; }
-        const Vec2 extent=object.facing%2 ? Vec2{0,half_length*object.scale} : Vec2{half_length*object.scale,0};
+        const auto& dimensions = scenery_model(object.kind);
+        const f32 radius = dimensions.trunk_radius;
+        const f32 half_length = dimensions.half_length, height = dimensions.size.z;
+        const f32 angle = scenery_heading(object);
+        const Vec2 extent = object.kind == SceneryKind::Chest
+            ? (object.facing % 2 ? Vec2{0, half_length * object.scale} : Vec2{half_length * object.scale, 0})
+            : Vec2{std::cos(angle), std::sin(angle)} * (half_length * object.scale);
         const f32 bottom = collision_floor(map, object.position);
         scene.colliders.push_back({object.position - extent, object.position + extent, radius * object.scale,
                                    bottom, bottom + height * object.scale, i});
@@ -143,8 +143,47 @@ Scenery build_scenery(const TileMap& map) {
         scene.objects.push_back({kind, variant, {x, y}, scale, color, map.index(static_cast<i32>(x), static_cast<i32>(y))});
     };
     const f32 band = std::max(map.mountain_level - map.sea_level, 1.0e-4f);
-    f32 highest = map.mountain_level + 1.0e-4f;
-    for (const f32 e : map.elevation) highest = std::max(highest, e);
+    const bool smooth_biomes=!map.biomes.empty();
+    const auto add_tree=[&](f32 x,f32 y,u32 h) {
+        const size_t i=static_cast<size_t>(map.index(static_cast<i32>(x),static_cast<i32>(y)));
+        const f32 altitude=(elevation(i)-map.sea_level)/band;
+        const f32 conifer=smoothstep(0.45f,0.80f,altitude+(0.5f-moisture(i))*0.5f);
+        const f32 size=hash_to_unit(hash32(h+2)),shade=hash_to_unit(hash32(h+3));
+        add(hash_to_unit(hash32(h+4))<conifer?SceneryKind::Conifer:SceneryKind::Broadleaf,hash32(h+5),x,y,
+            0.80f+0.35f*size,tint(0.84f+0.16f*shade,(hash_to_unit(hash32(h+6))-0.5f)*0.10f));
+    };
+    if(smooth_biomes) {
+        // Jittered candidates have at least two tiles between trunks. Dense
+        // cores overlap crowns while a human can still pass between trunks.
+        // Probability follows the continuous field across terrain boundaries.
+        constexpr f32 spacing=2.5f;
+        const f32 clearing=6.0f*static_cast<f32>(map.resolution)+2.0f;
+        for(i32 cy=0;static_cast<f32>(cy)*spacing<static_cast<f32>(map.height);++cy)
+            for(i32 cx=0;static_cast<f32>(cx)*spacing<static_cast<f32>(map.width);++cx) {
+                const u32 h=hash2(cx,cy,seed^0xB10D1E5u);
+                const f32 x=(static_cast<f32>(cx)+0.5f)*spacing+(hash_to_unit(hash32(h+1))-0.5f)*0.5f;
+                const f32 y=(static_cast<f32>(cy)+0.5f)*spacing+(hash_to_unit(hash32(h+2))-0.5f)*0.5f;
+                const i32 tx=static_cast<i32>(x),ty=static_cast<i32>(y);
+                if(!map.in_bounds(tx,ty))continue;
+                const size_t i=static_cast<size_t>(map.index(tx,ty));
+                const Terrain terrain=map.terrain[i];
+                if(terrain!=Terrain::Forest && terrain!=Terrain::Grass && terrain!=Terrain::Dirt)continue;
+                if(resource(i)!=Resource::None || (!map.flags.empty() && (map.flags[i]&TileFlag::Ramp)))continue;
+                if(length(Vec2{x-static_cast<f32>(map.start.x),y-static_cast<f32>(map.start.y)})<clearing)continue;
+                const f32 wood=map.biomes.sample({x,y}).woodland;
+                if(hash_to_unit(h)>=0.96f*smoothstep(0.07f,0.88f,wood))continue;
+                bool clear=true;
+                for(i32 ny=ty-2;ny<=ty+2 && clear;++ny)for(i32 nx=tx-2;nx<=tx+2;++nx) {
+                    if(!map.in_bounds(nx,ny)) {clear=false;break;}
+                    const size_t n=static_cast<size_t>(map.index(nx,ny));
+                    const Terrain t=map.terrain[n];
+                    const bool near=std::abs(nx-tx)<=1 && std::abs(ny-ty)<=1;
+                    if((near && (t==Terrain::Water || t==Terrain::Shallows || t==Terrain::Mountain)) || t==Terrain::Rocks || resource(n)!=Resource::None ||
+                       (!map.flags.empty() && (map.flags[n]&TileFlag::Ramp))) {clear=false;break;}
+                }
+                if(clear)add_tree(x,y,hash32(h+17));
+            }
+    }
 
     for (i32 y = 0; y < map.height; ++y) {
         for (i32 x = 0; x < map.width; ++x) {
@@ -163,52 +202,57 @@ Scenery build_scenery(const TileMap& map) {
 
             switch (map.terrain[i]) {
                 case Terrain::Forest: {
-                    // Conifers take over on higher, drier ground.
-                    const f32 altitude = (elevation(i) - map.sea_level) / band;
-                    const f32 conifer = smoothstep(0.45f, 0.80f, altitude + (0.5f - moisture(i)) * 0.5f);
-                    const int trees = r3 < 0.40f ? 2 : 1;
-                    for (int k = 0; k < trees; ++k) {
-                        const u32 hk = hash32(h3 + static_cast<u32>(k) * 0x9E3779B9u);
-                        const f32 a = hash_to_unit(hk), b = hash_to_unit(hash32(hk + 1)), c = hash_to_unit(hash32(hk + 2)), d = hash_to_unit(hash32(hk + 3));
-                        const bool is_conifer = hash_to_unit(hash32(hk + 4)) < conifer;
-                        add(is_conifer ? SceneryKind::Conifer : SceneryKind::Broadleaf, hash32(hk + 5), cx + (a - 0.5f) * 0.9f, cy + (b - 0.5f) * 0.9f,
-                            0.80f + 0.35f * c, tint(0.84f + 0.16f * d, (hash_to_unit(hash32(hk + 6)) - 0.5f) * 0.10f));
+                    // Hand-authored maps without ecology retain lone trees.
+                    if(!smooth_biomes) {
+                        bool selected=true;
+                        for(i32 ny=y/4*4;ny<std::min(y/4*4+4,map.height) && selected;++ny)
+                            for(i32 nx=x/4*4;nx<std::min(x/4*4+4,map.width);++nx) {
+                                const size_t n=static_cast<size_t>(map.index(nx,ny));
+                                if(map.terrain[n]==Terrain::Forest && resource(n)==Resource::None && hash2(nx,ny,seed)<h0) {selected=false;break;}
+                            }
+                        const u32 h=hash32(h3);
+                        if(selected)add_tree(cx+(hash_to_unit(h)-0.5f)*0.9f,cy+(hash_to_unit(hash32(h+1))-0.5f)*0.9f,h);
                     }
-                    break;
+                    // Forest floors now contain shrubs, grasses and fallen
+                    // branches; tree selection no longer skips the understory.
+                    [[fallthrough]];
                 }
-                case Terrain::Rocks: {
-                    add(SceneryKind::Boulder, h3, cx + (r0 - 0.5f) * 0.5f, cy + 0.25f + (r1 - 0.5f) * 0.4f, 0.85f + 0.45f * r2, tint(0.88f + 0.12f * r3, 0.02f));
-                    break;
-                }
-                case Terrain::Grass: {
+                case Terrain::Grass:
+                case Terrain::Dirt: {
+                    const bool dirt=map.terrain[i]==Terrain::Dirt;
+                    const BiomeDensity biome=smooth_biomes?map.biomes.sample({cx,cy}):
+                        BiomeDensity{map.terrain[i]==Terrain::Forest?0.85f:0.0f,0.35f,0.30f,0.18f};
                     bool waterside = false;
-                    for (int k = 0; k < 4 && !waterside; ++k) {
-                        const i32 nx = x + (k == 0) - (k == 1), ny = y + (k == 2) - (k == 3);
+                    for (int k = 0; k < 8 && !waterside; ++k) {
+                        const i32 distance=k<4?1:2;
+                        const i32 nx=x+distance*((k%4==0)-(k%4==1)),ny=y+distance*((k%4==2)-(k%4==3));
                         waterside = map.in_bounds(nx, ny) && map.terrain[static_cast<size_t>(map.index(nx, ny))] == Terrain::Water;
                     }
-                    // Ground cover grows in drifts rather than evenly: flower
-                    // meadows, thickets of shrubs and swathes of long grass.
-                    const f32 flowers = 0.015f + 0.34f * smoothstep(0.35f, 0.80f, simplex2(cx / 9.0f, cy / 9.0f, seed + 1u));
-                    const f32 shrubs = 0.006f + 0.16f * smoothstep(0.45f, 0.85f, simplex2(cx / 11.0f, cy / 11.0f, seed + 2u));
-                    const f32 grass = 0.07f + 0.34f * smoothstep(0.10f, 0.70f, simplex2(cx / 6.0f, cy / 6.0f, seed + 3u));
+                    // Ground materials carry fine litter; silhouettes are
+                    // occasional accents concentrated in their own patches.
+                    const f32 flowers=(0.008f+0.10f*biome.meadow*(1.0f-0.65f*biome.woodland))*(dirt?0.15f:1.0f);
+                    const f32 shrubs=(0.003f+0.075f*biome.scrub*biome.scrub)*(dirt?0.70f:1.0f);
+                    const f32 grass=(0.08f+0.22f*biome.meadow+0.10f*biome.woodland)*(1.0f-0.60f*biome.rock)*(dirt?0.4f:1.0f);
+                    const f32 branches=0.001f+0.009f*biome.woodland*biome.woodland;
+                    const f32 stones=0.002f+0.035f*biome.rock*biome.rock*biome.rock;
                     const f32 gx = cx + (r1 - 0.5f) * 0.8f, gy = cy + (r2 - 0.5f) * 0.8f;
-                    if (waterside && r0 < 0.45f) add(SceneryKind::Reed, h3, gx, gy, 0.9f + 0.3f * r3, tint(0.95f, 0.0f));
+                    if (waterside && r0 < 0.36f) add(SceneryKind::Reed, h3, gx, gy, 0.9f + 0.3f * r3, tint(0.95f, 0.0f));
                     else if (r0 < shrubs) add(SceneryKind::Bush, h3, gx, gy, 0.9f + 0.4f * r3, tint(0.9f + 0.1f * r3, 0.0f));
                     else if (r0 < shrubs + flowers) add(SceneryKind::Flower, h3, gx, gy, 0.9f + 0.3f * r3, tint(1.0f, 0.0f));
                     else if (r0 < shrubs + flowers + grass) add(SceneryKind::Tuft, h3, gx, gy, 0.8f + 0.4f * r3, tint(0.92f + 0.08f * r3, 0.0f));
+                    else if (r0 < shrubs + flowers + grass + branches) add(SceneryKind::Branch,h3,gx,gy,0.65f+0.30f*r3,tint(0.94f,0.03f));
+                    else if (r0 < shrubs + flowers + grass + branches + stones) add(SceneryKind::Pebble,h3,gx,gy,0.8f+0.45f*r3,tint(0.95f,0.03f));
                     break;
                 }
-                case Terrain::Dirt: {
-                    const f32 stones = 0.04f + 0.22f * smoothstep(0.30f, 0.80f, simplex2(cx / 7.0f, cy / 7.0f, seed + 4u));
-                    if (r0 < stones) add(SceneryKind::Pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.5f * r3, tint(0.95f, 0.04f));
-                    else if (r0 < stones + 0.05f) add(SceneryKind::Tuft, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.8f + 0.3f * r3, tint(0.9f, 0.08f));
+                case Terrain::Rocks: {
+                    add(SceneryKind::Boulder,h3,cx+(r0-0.5f)*0.5f,cy+0.25f+(r1-0.5f)*0.4f,0.85f+0.45f*r2,tint(0.88f+0.12f*r3,0.02f));
                     break;
                 }
                 case Terrain::Sand:
-                    if (r0 < 0.03f) add(SceneryKind::Pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.7f + 0.4f * r3, tint(1.0f, 0.03f));
+                    if (r0 < 0.01f) add(SceneryKind::Pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.7f + 0.4f * r3, tint(1.0f, 0.03f));
                     break;
                 case Terrain::Shallows:
-                    if (r0 < 0.16f) add(SceneryKind::Pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.9f + 0.5f * r3, tint(0.9f, -0.04f));
+                    if (r0 < 0.04f) add(SceneryKind::Pebble, h3, cx + (r1 - 0.5f) * 0.8f, cy + (r2 - 0.5f) * 0.8f, 0.9f + 0.5f * r3, tint(0.9f, -0.04f));
                     break;
                 default: break;
             }
@@ -266,7 +310,7 @@ bool Scenery::overlaps(Vec2 position, f32 radius, f32 bottom, f32 height) const 
     return false;
 }
 
-bool Scenery::sweep(Vec2 from, Vec2 displacement, f32 radius, f32 bottom, f32 height, ObjectContact& hit) const {
+bool Scenery::sweep(Vec2 from, Vec2 displacement, f32 radius, f32 bottom, f32 height, ObjectContact& hit, u32 ignored_object) const {
     hit.time = 1.0f;
     if (!ready || colliders.empty() || dot(displacement, displacement) < 1.0e-14f) return false;
     const Vec2 to = from + displacement;
@@ -279,6 +323,7 @@ bool Scenery::sweep(Vec2 from, Vec2 displacement, f32 radius, f32 bottom, f32 he
         for (u32 i = offsets_[cell]; i < offsets_[cell + 1]; ++i) {
             const u32 index = indices_[i];
             const ObjectCollider& collider = colliders[index];
+            if (collider.object == ignored_object) continue;
             if (!vertical_overlap(collider, bottom, height)) continue;
             if (capsule_hit(from, displacement, collider.a, collider.b, radius + collider.radius, hit.time, hit.normal)) {
                 hit.collider = index; found = true;

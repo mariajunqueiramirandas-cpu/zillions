@@ -39,10 +39,10 @@ For reproducible captures, add `--rotation 0`, `90`, `180` or `270`:
 ## Artwork and rendering
 
 The existing painted ground textures are mapped onto the terrain in simulation
-coordinates. Trees, rocks, ore and ground cover remain upright billboards;
-their existing angled silhouettes and painted contact shadows suit this view,
-so replacement artwork is unnecessary. Camera rotation reorders their world
-anchors while preserving their upright appearance. A fixed world-space sun
+coordinates. Trees, rocks, ore, ground cover and camp props now use instanced
+3D GLB meshes, with upright painted billboards as the missing-model fallback.
+Camera rotation reveals their real geometry. See [world scale](world-scale.md).
+A fixed world-space sun
 lights terrain and procedural characters; its cast direction turns naturally
 on screen as the camera rotates.
 
@@ -78,7 +78,7 @@ base in contact with the shadow as its facing or the camera changes.
 The light volume includes offscreen casters. Its texel-aligned bounds follow the
 visible terrain and its height; static views reuse the depth map. Panning,
 zooming, Q/E rotation, regeneration and F5 art reload refresh it as needed.
-A 3×3 filter with hardware depth comparison softens the edges. Nearby blocker
+A twelve-tap disk filter with hardware depth comparison softens the edges. Nearby blocker
 depth controls the filter radius, keeping low-object contact edges firm while
 taller shadows soften. Terrain uses receiver-plane correction and a texel-scaled
 bias; painted chests retain their own face lighting and exclude their proxy from

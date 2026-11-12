@@ -2,11 +2,13 @@
 // character: this executable lets you walk the player's character about a
 // generated map, fly the camera over it and capture screenshots.
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <initializer_list>
 #include <string>
@@ -68,8 +70,8 @@ struct Options {
 
 // Pixels per tile the camera starts at when it follows the character, the
 // tactical city-builder overview in management mode, and the closest it will go.
-constexpr f32 kFollowZoom = 64.0f;
-constexpr f32 kManagementZoom = 34.0f;
+constexpr f32 kFollowZoom = 32.0f;
+constexpr f32 kManagementZoom = 12.0f;
 constexpr f32 kMaxZoom = 256.0f;
 constexpr f32 kEdgePanMargin = 36.0f;
 
@@ -77,7 +79,7 @@ void usage() {
     std::puts(
         "usage: zillions [options]\n"
         "  --seed N             map seed (default 1)\n"
-        "  --size N             map size in tiles (default 512)\n"
+        "  --size N             map size in tiles (default 4096; 5.12 km at player scale)\n"
         "  --resolution N       tiles per world unit: 1, 2 or 4 (default 2)\n"
         "  --width W --height H window or screenshot size in pixels\n"
         "  --no-vsync           uncap the frame rate\n"
@@ -305,7 +307,7 @@ struct Scene {
 
 bool save_screenshot(Scene& scene, const IsometricCamera& camera, const MapDrawOptions& draw, const Figure* figure, Vec2 position, const char* path, const PlagueDraw* plague = nullptr) {
     RenderTarget target;
-    target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y));
+    target.create(static_cast<i32>(camera.viewport.x), static_cast<i32>(camera.viewport.y), 4);
     target.bind();
     scene.draw(camera, draw, figure, position, 0.0f, plague);
     const Image image = target.read_pixels();
@@ -367,7 +369,7 @@ bool record_player_demo(Scene& scene, const TileMap& map, Player& player, Isomet
              << ",\"style\":\"" << (scene.plague ? "plague" : (scene.figures.style() == FigureStyle::Painted ? "painted" : "smooth")) << "\",\"frames\":[\n";
     Vec2 previous_camera = camera.center;
     RenderTarget target;
-    target.create(options.width, options.height);
+    target.create(options.width, options.height, 4);
     Figure figure;
     i32 tick = 0;
     constexpr f32 dt = 1.0f / 60.0f;
@@ -699,7 +701,34 @@ int main(int argc, char** argv) {
                art.painted_sprites ? "painted" : "placeholder", timer.millis());
     }
 
-    TileMap map = generate_map(options.map, jobs);
+    TileMap map;
+    if (config.visible && options.map.size >= 1024) {
+        // A multi-kilometre map takes real work. Keep the window responsive
+        // while the CPU generator runs, rather than freezing a black window.
+        window.set_title("Zillions | Generating the vast wilderness...");
+        auto pending = std::async(std::launch::async, [&] { return generate_map(options.map, jobs); });
+        while (pending.wait_for(std::chrono::milliseconds(16)) != std::future_status::ready) {
+            window.poll();
+            const IVec2 fb = window.framebuffer_size();
+            if (fb.x <= 0 || fb.y <= 0) continue;
+            RenderTarget::bind_default(fb.x, fb.y);
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(0.055f, 0.052f, 0.044f, 1);
+            glClear(GL_COLOR_BUFFER_BIT);
+            const i32 width = fb.x / 3, left = (fb.x - width) / 2;
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(left, fb.y / 2, width, 5);
+            glClearColor(0.16f, 0.15f, 0.11f, 1); glClear(GL_COLOR_BUFFER_BIT);
+            const f32 phase = static_cast<f32>(std::fmod(now_seconds() * 0.35, 1.0));
+            glScissor(left + static_cast<i32>(phase * static_cast<f32>(width * 3 / 4)), fb.y / 2, width / 4, 5);
+            glClearColor(0.58f, 0.56f, 0.35f, 1); glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+            window.swap_buffers();
+        }
+        map = pending.get();
+        if (window.should_close()) return 0;
+        window.set_title("Zillions | Raising mountains and planting ancient forests...");
+    } else map = generate_map(options.map, jobs);
     {
         const Stopwatch timer;
         renderer.set_map(map, jobs);
@@ -860,6 +889,7 @@ int main(int argc, char** argv) {
         camera.center_height = renderer.surface_height(camera.center, camera.zoom) + 0.5f;
     }
 
+    RenderTarget frame;
     while (!window.should_close()) {
         window.poll();
         const Input& in = window.input();
@@ -1086,7 +1116,8 @@ int main(int argc, char** argv) {
         camera.center.y = clamp(camera.center.y, 0.0f, static_cast<f32>(map.height));
 
         const Stopwatch frame_timer;
-        RenderTarget::bind_default(fb.x, fb.y);
+        if (frame.width() != fb.x || frame.height() != fb.y) frame.create(fb.x, fb.y, 4);
+        frame.bind();
         const Figure* posed = pose_figure(alpha);
         const Vec2 standing = player.position_at(alpha);
         const f32 management_ring = !follow ? (1.0f - smoothstep(26.0f, 44.0f, camera.zoom)) * 0.32f : 0.0f;
@@ -1131,14 +1162,13 @@ int main(int argc, char** argv) {
             hud.impact(camera.world_to_screen(impact_position,renderer.surface_height(impact_position,camera.zoom)),camera.viewport,impact_item,impact_age);
             hud.draw(camera.viewport,in,survival,prompt.empty()?nullptr:prompt.c_str(),follow);
         }
+        frame.present();
         frame_ms_sum += frame_timer.millis();
         ++frames;
 
         if (in.pressed(Key::F2)) {
             const std::string path = "zillions_" + std::to_string(map.seed) + "_" + std::to_string(shot_index++) + ".png";
-            Image capture(fb.x,fb.y);
-            glReadPixels(0,0,fb.x,fb.y,GL_RGBA,GL_UNSIGNED_BYTE,capture.bytes());
-            for(int y=0;y<fb.y/2;++y) for(int x=0;x<fb.x;++x) std::swap(capture.at(x,y),capture.at(x,fb.y-1-y));
+            const Image capture = frame.read_pixels();
             if(write_png(path.c_str(),capture)) ZL_LOG("wrote %s",path.c_str());
         }
 

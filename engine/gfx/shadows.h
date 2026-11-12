@@ -14,7 +14,8 @@ struct ShadowView {
     // light is fixed in world space, independent of camera quarter turns.
     Vec2 light{-0.90f, -0.35f};
     f32 height = 1.0f;
-    f32 softness = 0.12f;
+    f32 softness = 0.30f;
+    i32 resolution = 4096;
 };
 
 // Binds comparison texture unit 6 and raw depth unit 7, supplying the uniforms

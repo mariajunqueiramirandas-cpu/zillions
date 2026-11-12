@@ -20,7 +20,7 @@ as the reference rig for the painted sprite path; see
 The character's bind pose is 1.70 m tall with its feet at the origin and its
 forward along +Z. The tools are about 1.9 m long with the handle along +Y, the
 head at +Y and the grip near y=-0.55. All three files embed their textures; the
-loader decodes only the base-colour image. The renderer requests 2048² for the
+loader decodes base colour and the packed metallic-roughness image. The renderer requests 2048² for the
 character and uses the loader's 1024² default for the tools. The model is drawn
 at the game's 0.8 tiles per metre, so it stands about 1.36 tiles tall.
 
@@ -36,7 +36,7 @@ keeps the subset the game needs:
   `WEIGHTS_0`, with weights normalized to one;
 - skins with joints and inverse bind matrices;
 - LINEAR and STEP animation channels (CUBICSPLINE is rejected);
-- base-colour materials, decoded with stb_image and box-filtered to the
+- base-colour and metallic-roughness materials, decoded with stb_image and box-filtered to the
   requested maximum size (1024² by default).
 
 Static primitives have their node transform baked into the vertices. Skinned
@@ -95,9 +95,10 @@ isometric scene:
   depth formula as the terrain and sprites. The model writes depth, so southern
   scenery occludes it; the scene splits scenery at the player's ground depth
   and fades tall foreground sprites around the model's projected bounds.
-- **Light and shadow.** The shader samples the cached sun shadow map, uses the
-  terrain's warm sun and a lifted warm ambient/fill, and adds a rim and a small
-  specular highlight. The near-black coat stays readable in tree shade.
+- **Light and shadow.** The shader samples the cached sun shadow map and uses
+  the same linear-space sun, sky, material response and display curve as the
+  terrain and scenery. Authored metallic-roughness maps separate cloth, wood
+  and metal. See [lighting](lighting.md).
 - **Water.** Fragments below `ground + wade * 0.8` are discarded, so the legs
   disappear into a ford at the waterline.
 - **Contact shadow and marker.** A soft ground-projected ellipse grounds the
@@ -178,6 +179,6 @@ One live skinned character is cheap; a horde of them is not. The 287k-triangle
 character and 223–287k-triangle tools are fine for the player, but the horde
 still needs sprite baking or a lower-detail variant before thousands of units
 move. The model has no finger joints, so the gloves retain their authored
-shape around the palm sockets. Only base colour is currently decoded; material
-roughness and normal maps are not used. The source texture still limits detail
+shape around the palm sockets. Base colour and metallic-roughness are decoded;
+normal maps are not yet used. The source texture still limits detail
 at extreme close zoom.

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "gfx/gl.h"
+#include "gfx/lighting.h"
 
 namespace zl {
 
@@ -303,7 +304,7 @@ vec4 sceneShadow(vec4 color, float depth) {
     float sum = (plane.y + height * 0.866025404) / 0.353553391;
     float difference = plane.x / 0.707106781;
     vec2 position = uInverseRotation * vec2(sum + difference, sum - difference) * 0.5;
-    color.rgb *= mix(vec3(0.53, 0.58, 0.65), vec3(1.0), shadowVisibility(position, height, false));
+    if(color.a>0.0001)color.rgb=scenePaintedShadow(color.rgb/color.a,shadowVisibility(position,height,false))*color.a;
     return color;
 }
 
@@ -432,7 +433,7 @@ FigureRenderer::~FigureRenderer() {
 }
 
 void FigureRenderer::init(const char* asset_dir) {
-    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kFragment;
+    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kSceneLightingGLSL + kFragment;
     shader_.compile("figure", kVertex, fragment.c_str());
     shader_.bind();
     glUniform1i(shader_.uniform("uParts"), 0);

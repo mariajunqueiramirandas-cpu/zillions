@@ -1,4 +1,5 @@
 #include "render/map_renderer.h"
+#include "render/terrain_material.h"
 
 #include <algorithm>
 #include <cmath>
@@ -7,6 +8,7 @@
 #include <string>
 
 #include "gfx/gl.h"
+#include "gfx/lighting.h"
 #include "render/relief.h"
 
 namespace zl {
@@ -17,7 +19,7 @@ namespace {
 // of pixels and the ground shader alone carries the picture.
 constexpr f32 kDecorMinZoom = 2.5f;
 constexpr f32 kChunkSize = 16.0f;
-constexpr i32 kShadowResolution = 2048;
+constexpr i32 kShadowResolution = 4096;
 // Physical shadow/receiver proxies for the painted low props. The box's base
 // is the footprint center; its volume is independent of the camera's sprite.
 constexpr Vec3 kChestBox{0.55f,0.20f,0.34f}; // half width/depth, full height
@@ -92,8 +94,8 @@ const char* kTerrainFragment = R"(
 uniform sampler2D uTiles;         // r: terrain id, g: resource id, b: tile flags, a: height level (point sampled)
 uniform sampler2D uRelief;        // rg: surface normal, b: height, a: cavity (ridge > 0.5 > valley)
 uniform sampler2D uSurface;       // r: mountain altitude, g: cliff face, b: height level
-uniform sampler2D uDepth;         // r: distance from water to shore, g: moisture
-uniform sampler2DArray uGround;   // one tiling texture per terrain, then noise
+uniform sampler2D uDepth;         // r: water depth, g: moisture, b: woodland, a: scree
+uniform bool uBiomes;
 uniform vec2 uMapSize;
 uniform mat2 uRotation;
 uniform float uTime;
@@ -116,14 +118,21 @@ const vec3 WATER_DEEP = vec3(0.10, 0.16, 0.17);
 const vec3 WATER_GLINT = vec3(0.52, 0.50, 0.40);   // light patterns on the surface, tinted bone
 const vec3 FOAM = vec3(0.78, 0.77, 0.67);          // scum along the shoreline
 const vec3 SCRUB = vec3(0.72, 0.74, 0.46);         // sallow growth on mountain foothills
-const vec3 HAZE = vec3(0.56, 0.53, 0.47);          // smoke in the air
 
 float tileId(ivec2 c) { return floor(texelFetch(uTiles, c, 0).r * 255.0 + 0.5); }
 
-vec3 groundColor(float id, vec2 uv, float moisture) {
+vec3 groundColor(float id, vec2 uv, float moisture, vec2 ecology) {
+    if(id==MOUNTAIN)return vec3(1.0); // sampled in three world-space projections below
     vec3 c = texture(uGround, vec3(uv, id)).rgb;
+    if(uBiomes && (id==GRASS || id==FOREST)) {
+        // The same continuous woodland concentration that places trees also
+        // blends leaf litter into meadow turf over the whole forest fringe.
+        c=mix(texture(uGround,vec3(uv,GRASS)).rgb,texture(uGround,vec3(uv,FOREST)).rgb,
+              smoothstep(0.08,0.95,ecology.x));
+        c=mix(c,texture(uGround,vec3(uv,4.0)).rgb,0.22*ecology.y*(1.0-ecology.x));
+    }
     // Vegetation is yellower on dry ground and deeper green where it is wet.
-    vec3 climate = mix(vec3(1.12, 1.02, 0.78), vec3(0.88, 1.02, 0.96), moisture);
+    vec3 climate = mix(vec3(1.03, 1.00, 0.94), vec3(0.96, 1.00, 0.99), moisture);
     if (id == GRASS) c *= climate;
     if (id == FOREST) c *= mix(vec3(1.0), climate, 0.6);
     return c;
@@ -177,50 +186,61 @@ void main() {
     // Still, murky water: grey-green at the shore, near-black green in the deeps.
     vec3 waterColor = mix(mix(WATER_SHORE, WATER_MID, smoothstep(0.0, 1.6, depth)), WATER_DEEP, smoothstep(1.4, 7.0, depth));
     waterColor *= 1.0 + ripple * 0.12;
-    waterColor += WATER_GLINT * caustic * 0.75 * (1.0 - 0.75 * smoothstep(1.0, 6.0, depth));
+    waterColor += WATER_GLINT * caustic * 0.16 * (1.0 - 0.75 * smoothstep(1.0, 6.0, depth));
     vec3 bed = texture(uGround, vec3(uv, SHALLOWS)).rgb;
-    vec3 shallowColor = mix(bed, WATER_SHORE, 0.38) * 1.10 + WATER_GLINT * caustic * 1.0;
+    vec3 shallowColor = mix(bed, WATER_SHORE, 0.38) + WATER_GLINT * caustic * 0.22;
 
     // --- land ---
-    vec3 g0 = groundColor(id.x, uv, moisture);
-    vec3 g1 = groundColor(id.y, uv, moisture);
-    vec3 g2 = groundColor(id.z, uv, moisture);
-    vec3 g3 = groundColor(id.w, uv, moisture);
+    vec3 g0 = groundColor(id.x, uv, moisture, hydro.ba);
+    vec3 g1 = groundColor(id.y, uv, moisture, hydro.ba);
+    vec3 g2 = groundColor(id.z, uv, moisture, hydro.ba);
+    vec3 g3 = groundColor(id.w, uv, moisture, hydro.ba);
 
     vec3 n = vec3(relief.rg * 2.0 - 1.0, 0.0);
     n.z = sqrt(max(0.0, 1.0 - dot(n.xy, n.xy)));
-    float light = dot(n, LIGHT) / LIGHT.z;  // 1 on level ground
-    // Ridges catch the light and valleys hold shade, beyond what the slope alone gives.
+    vec3 worldPosition=vec3(p,vHeight);
+    vec3 geometricNormal=normalize(cross(dFdx(worldPosition),dFdy(worldPosition)));
+    if(vWall<0.5) {if(geometricNormal.z<0.0)geometricNormal=-geometricNormal;}
+    else if(dot(geometricNormal,sceneViewDirection(uRotation))<0.0)geometricNormal=-geometricNormal;
+    // Smooth heightfield normals hide tessellation boundaries on the massif;
+    // true wall geometry still supplies its own vertical-facing normal.
+    vec3 materialNormal=vWall>0.5?geometricNormal:n;
+    vec3 projection=rockProjectionWeights(materialNormal);
+    vec3 rockColor=terrainRockColor(worldPosition,projection);
+    vec3 rockMaterial=rockSampleData(uRockParameters,worldPosition/3.2,projection);
+    vec3 rockNormal=terrainRockNormal(worldPosition,materialNormal,projection,uPixel);
+    // These are material variations and local cavity occlusion. Directional
+    // light is evaluated once below, through the same BRDF as every mesh.
     float cavity = clamp((relief.a - 0.5) * 2.0, -1.0, 1.0);
     float cliff = surface.g;
-    float shade = clamp(1.0 + (light - 1.0) * mix(0.42, 0.90, max(rock, cliff)), 0.69, 1.27);
-    // On open ground the same term brightens the rim of a plateau and darkens the foot of its cliff.
-    shade *= 1.0 + cavity * mix(0.20, 0.28, rock);
-    shade *= 0.90 + 0.22 * broad.b;  // large-scale tonal variation hides texture repeats
-    // Painterly light on rock: warm where lit, cool in shade.
-    vec3 rockLight = mix(vec3(0.84, 0.90, 1.02), vec3(1.05, 1.00, 0.92), smoothstep(0.70, 1.20, light));
+    float stoneCoverage=clamp(max(rock,cliff*(1.0-smoothstep(0.2,0.6,water))),0.0,1.0);
+    n=normalize(mix(n,rockNormal,stoneCoverage));
+    float shade = mix(0.96, 1.04, broad.b);
+    float occlusion = clamp(1.0 + cavity * 0.22, 0.78, 1.0);
+    occlusion*=mix(1.0,max(rockMaterial.r,0.45),stoneCoverage);
 
     // Rock is tinted by altitude: scrubby lower slopes, grey flanks, pale summits.
     float altitude = surface.r;
     vec3 rockTint = mix(mix(vec3(0.92, 0.88, 0.72), vec3(1.02, 1.00, 0.96), smoothstep(0.0, 0.30, altitude)),
-                        vec3(1.20, 1.19, 1.20), smoothstep(0.30, 0.95, altitude)) * rockLight;
+                        vec3(1.12, 1.12, 1.13), smoothstep(0.30, 0.95, altitude));
     float scrub = (1.0 - smoothstep(0.03, 0.20, altitude + (noise.b - 0.5) * 0.10)) * (0.35 + 0.5 * moisture);
+    scrub*=smoothstep(0.40,0.82,geometricNormal.z);
     rockTint = mix(rockTint, SCRUB, scrub);
 
     // Damp, darker ground at the water's edge.
     float damp = smoothstep(0.08, 0.5, water + shallows);
     // Higher ground is paler and drier in tone, which sets plateaus apart at a glance.
-    vec3 landShade = shade * (1.0 - 0.22 * damp) * mix(vec3(0.90, 0.95, 0.96), vec3(1.13, 1.09, 0.93), surface.b);
+    vec3 landShade = shade * (1.0 - 0.18 * damp) * mix(vec3(0.96, 0.98, 1.0), vec3(1.04, 1.02, 0.98), surface.b);
 
     vec3 color = vec3(0.0);
-    color += s.x * (id.x == WATER ? waterColor : (id.x == SHALLOWS ? shallowColor : g0 * (id.x == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
-    color += s.y * (id.y == WATER ? waterColor : (id.y == SHALLOWS ? shallowColor : g1 * (id.y == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
-    color += s.z * (id.z == WATER ? waterColor : (id.z == SHALLOWS ? shallowColor : g2 * (id.z == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
-    color += s.w * (id.w == WATER ? waterColor : (id.w == SHALLOWS ? shallowColor : g3 * (id.w == MOUNTAIN ? rockTint : vec3(1.0)) * landShade));
+    color += s.x * (id.x == WATER ? waterColor : (id.x == SHALLOWS ? shallowColor : (id.x == MOUNTAIN ? rockColor*rockTint : g0) * landShade));
+    color += s.y * (id.y == WATER ? waterColor : (id.y == SHALLOWS ? shallowColor : (id.y == MOUNTAIN ? rockColor*rockTint : g1) * landShade));
+    color += s.z * (id.z == WATER ? waterColor : (id.z == SHALLOWS ? shallowColor : (id.z == MOUNTAIN ? rockColor*rockTint : g2) * landShade));
+    color += s.w * (id.w == WATER ? waterColor : (id.w == SHALLOWS ? shallowColor : (id.w == MOUNTAIN ? rockColor*rockTint : g3) * landShade));
 
     // Cliff faces are bare rock, banded along the slope like exposed strata.
     float strata = 0.90 + 0.10 * sin(surface.b * 150.0 + noise.r * 5.0);
-    vec3 face = texture(uGround, vec3(uv * 2.0, MOUNTAIN)).rgb * 2.0 * vec3(0.72, 0.67, 0.58) * rockLight * strata;
+    vec3 face = rockColor * vec3(0.95, 0.97, 1.0) * strata;
     color = mix(color, face * shade, cliff * (1.0 - smoothstep(0.2, 0.6, water)));
 
     // Scum breathing along the shoreline.
@@ -228,21 +248,17 @@ void main() {
     float foam = shore * (0.55 + 0.45 * sin(uTime * 1.3 + noise.a * 12.0 + p.x * 0.7));
     color = mix(color, FOAM, foam * 0.35);
 
-    // Direct sun is occluded; cool ambient sky light remains in the shadows.
-    // Apply to water too, so banks and trees cast across the shoreline.
-    float visibility = shadowVisibility(p, vHeight);
-    if (uShadows) {
-        // A face turned away from the sun has no direct illumination. Handle
-        // grazing faces analytically rather than letting shadow-map precision
-        // leave contour-shaped bands across a steep mountain flank.
-        visibility *= smoothstep(-0.20, 0.20, dot(n, LIGHT));
+    if (vWall > 0.5) {
+        float bands = 0.90 + 0.06 * sin(vHeight * 12.0 / uUnit + noise.r * 3.0);
+        color = rockColor * bands;
+        n = rockNormal;
+        stoneCoverage=1.0;
     }
-    color *= mix(vec3(0.52, 0.58, 0.66), vec3(1.0), visibility);
-
-    // An overcast, smoke-stained light over everything: a little colour
-    // drained from the ground and a thin warm-grey haze laid on top.
-    color = mix(vec3(dot(color, vec3(0.299, 0.587, 0.114))), color, 0.86);
-    color = mix(color, HAZE, 0.06);
+    // All world surfaces share one linear-space sun, sky and display curve.
+    float visibility = shadowVisibility(p, vHeight);
+    float roughness=mix(0.92,clamp(0.55+0.45*rockMaterial.g,0.65,1.0),stoneCoverage);
+    color = sceneDisplay(sceneLighting(sceneToLinear(color), n, LIGHT, sceneViewDirection(uRotation),
+                                        visibility, mix(roughness,0.25,water), 0.0, occlusion));
 
     vec2 fromEdge = abs(fract(p) - 0.5);
     vec2 lineWidth = min(vec2(0.45), fwidth(p) * 1.1);
@@ -281,11 +297,6 @@ void main() {
         }
     }
 
-    if (vWall > 0.5) {
-        float strata = 0.78 + 0.09 * sin(vHeight * 12.0 / uUnit + noise.r * 3.0);
-        color = texture(uGround, vec3(vec2((p.x + p.y) / 4.0, vHeight / (4.0 * uUnit)), MOUNTAIN)).rgb;
-        color *= vec3(0.63, 0.56, 0.46) * strata;
-    }
     oColor = vec4(color, 1.0);
 }
 )";
@@ -378,7 +389,7 @@ MapRenderer::~MapRenderer() {
 void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     reload_art(jobs, asset_dir);
 
-    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kTerrainFragment;
+    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kSceneLightingGLSL + kTerrainMaterialGLSL + kTerrainFragment;
     terrain_.compile("terrain", kTerrainVertex, fragment.c_str());
     terrain_depth_.compile("terrain shadow depth", kTerrainVertex, kDepthFragment);
     scenery_depth_.compile("scenery shadow depth", kCasterVertex, kCasterFragment);
@@ -391,6 +402,8 @@ void MapRenderer::init(JobSystem& jobs, const char* asset_dir) {
     glUniform1i(terrain_.uniform("uGround"), 3);
     glUniform1i(terrain_.uniform("uSurface"), 4);
     glUniform1i(terrain_.uniform("uHeights"), 5);
+    glUniform1i(terrain_.uniform("uRockParameters"),8);
+    glUniform1i(terrain_.uniform("uRockHeight"),9);
     u_view_ = terrain_.uniform("uView");
     u_rotation_ = terrain_.uniform("uRotation");
     u_depth_scale_ = terrain_.uniform("uDepthScale");
@@ -477,11 +490,16 @@ void MapRenderer::reload_art(JobSystem& jobs, const char* asset_dir) {
     shadows_valid_ = false;
     art_ = load_terrain_art(jobs, asset_dir);
     ground_.create_array(art_.ground, TextureFilter::Trilinear, TextureWrap::Repeat);
+    mountain_parameters_.create(art_.mountain_parameters,TextureFilter::Trilinear,TextureWrap::Repeat);
+    mountain_height_.create(art_.mountain_height,TextureFilter::Trilinear,TextureWrap::Repeat);
+    art_.mountain_parameters={};art_.mountain_height={};
     sprites_.create(art_.sprites, TextureFilter::Trilinear, TextureWrap::Clamp, kSpriteAtlasMipLevel);
     // CPU images are only needed during upload; keep the catalogue and flags.
     art_.ground.clear();
     art_.ground.shrink_to_fit();
     art_.sprites = {};
+    scenery_models_.init(asset_dir);
+    if (map_width_ > 0) rebuild_decor();
 }
 
 void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
@@ -495,9 +513,15 @@ void MapRenderer::set_map(const TileMap& map, JobSystem& jobs) {
         const size_t k = static_cast<size_t>(i);
         tiles.pixels[k] = {static_cast<u8>(map.terrain[k]), static_cast<u8>(map.resource[k]), map.flags[k], map.level[k]};
         hydro.pixels[k] = {map.shore_dist[k], static_cast<u8>(saturate(map.moisture[k]) * 255.0f + 0.5f), 0, 255};
+        if(!map.biomes.empty()) {
+            const auto biome=map.biomes.sample({static_cast<f32>(i%w)+0.5f,static_cast<f32>(i/w)+0.5f});
+            hydro.pixels[k].b=static_cast<u8>(biome.woodland*255.0f+0.5f);
+            hydro.pixels[k].a=static_cast<u8>(biome.rock*255.0f+0.5f);
+        }
     }
     tiles_.create(tiles, TextureFilter::Nearest, TextureWrap::Clamp);
     depth_.create(hydro, TextureFilter::Linear, TextureWrap::Clamp);
+    terrain_.bind();glUniform1i(terrain_.uniform("uBiomes"),!map.biomes.empty());
 
     Relief relief = build_relief(map, jobs);
     relief_.create(relief.shape, TextureFilter::Linear, TextureWrap::Clamp);
@@ -540,12 +564,22 @@ void MapRenderer::build_decor(const TileMap& map) {
     if (!map.scenery.ready) fallback = build_scenery(map);
     const Scenery& scene = map.scenery.ready ? map.scenery : fallback;
     collision_geometry_ = scene.colliders;
+    render_scene_.objects = scene.objects;
+    rebuild_decor();
+}
+
+void MapRenderer::rebuild_decor() {
+    decor_.clear();
+    const Scenery& scene = render_scene_;
+    scenery_models_.set_scene(scene, map_width_, map_height_, [&](Vec2 p) { return ground_height(p); });
     const SpriteSet* families[] = {&art_.broadleaf, &art_.conifer, &art_.bush, &art_.stone, &art_.iron, &art_.gold,
                                    &art_.boulder, &art_.tuft, &art_.flower, &art_.pebble, &art_.reed,
                                    &art_.branch, &art_.stump, &art_.rubble, &art_.chest};
-    decor_.reserve(scene.objects.size());
+    if (scenery_models_.model_count() < static_cast<u32>(SceneryKind::Count))
+        decor_.reserve(scene.objects.size());
     for (const SceneryObject& object : scene.objects) {
         if (!object.active) continue;
+        if (scenery_models_.has_model(object.kind)) continue;
         const SpriteSet& set = *families[static_cast<size_t>(object.kind)];
         const SpriteDef& d = art_.defs[static_cast<size_t>(set.first) + object.variant % static_cast<u32>(set.count)];
         SpriteInstance sprite;
@@ -557,7 +591,7 @@ void MapRenderer::build_decor(const TileMap& map) {
         sprite.color = pack_color(object.color.r, object.color.g, object.color.b, object.color.a);
         sprite.anchor = d.anchor_y / d.height;
         if(object.kind==SceneryKind::Chest)sprite.box_facing=static_cast<f32>(object.facing);
-        const bool casts = scenery_blocks(object.kind) || object.kind == SceneryKind::Bush || object.kind == SceneryKind::Stump;
+        const bool casts = true;
         decor_.push_back({object.position, ground_height(object.position), sprite, casts,
                           object.kind==SceneryKind::Chest?set.first:-1,object.facing,object.kind,object.scale});
     }
@@ -594,6 +628,8 @@ SpriteInstance MapRenderer::view_sprite(const Decor& decor, i32 rotation) const 
 }
 
 void MapRenderer::draw_chest_preview(const IsometricCamera& camera, Vec2 point, bool valid, u8 facing) {
+    if (scenery_models_.draw_preview(camera, point, surface_height(point,camera.zoom), valid, facing,
+                                     depth_scale(), heights_.id(), mesh_step(camera.zoom))) return;
     const auto& d=art_.defs[static_cast<size_t>(art_.chest.first+((camera.rotation%4+4)+facing)%4)];
     const Vec2 projected=camera.project(point,surface_height(point,camera.zoom));
     SpriteInstance s{};
@@ -619,7 +655,8 @@ f32 MapRenderer::ground_height(Vec2 position) const {
 }
 
 f32 MapRenderer::mesh_step(f32 zoom) const {
-    f32 step = tiles_per_unit_ / static_cast<f32>(kReliefTexelsPerUnit);
+    f32 step = height_width_ > 0 ? static_cast<f32>(map_width_) / static_cast<f32>(height_width_)
+                               : tiles_per_unit_ / static_cast<f32>(kReliefTexelsPerUnit);
     while (step * zoom < 6.0f && step < 4.0f) step *= 2.0f;
     return step;
 }
@@ -706,7 +743,7 @@ void MapRenderer::frame_map(IsometricCamera& camera) const {
         for (i32 corner = 0; corner < 4; ++corner) {
             const Vec2 p{std::min(chunk.origin.x + static_cast<f32>(corner & 1) * kChunkSize, static_cast<f32>(map_width_)),
                          std::min(chunk.origin.y + static_cast<f32>(corner >> 1) * kChunkSize, static_cast<f32>(map_height_))};
-            for (f32 z : {-1.5f * tiles_per_unit_, chunk.high + 3.0f}) {
+            for (f32 z : {-1.5f * tiles_per_unit_, chunk.high + kSceneryMaxHeight}) {
                 const Vec2 q = camera.project(p, z);
                 lo.x = std::min(lo.x, q.x); lo.y = std::min(lo.y, q.y);
                 hi.x = std::max(hi.x, q.x); hi.y = std::max(hi.y, q.y);
@@ -719,37 +756,54 @@ void MapRenderer::frame_map(IsometricCamera& camera) const {
 }
 
 void MapRenderer::update_shadows(const IsometricCamera& camera) {
-    const f32 top = height_range_ * tiles_per_unit_ + 8.0f;
+    const f32 top = height_range_ * tiles_per_unit_ + std::max(kSceneryMaxHeight, scenery_models_.max_height());
+    const f32 object_height = std::max(kSceneryMaxHeight, scenery_models_.max_height());
+    f32 receiver_low = camera.center_height, receiver_high = camera.center_height;
+    for (const Chunk& chunk : chunks_) {
+        Vec2 lo{1.0e9f, 1.0e9f}, hi{-1.0e9f, -1.0e9f};
+        for (i32 corner = 0; corner < 4; ++corner) {
+            const Vec2 p = chunk.origin + Vec2{(corner & 1) ? kChunkSize : 0.0f, (corner & 2) ? kChunkSize : 0.0f};
+            for (f32 z : {chunk.low, chunk.high + object_height}) {
+                const Vec2 q = camera.world_to_screen(p, z);
+                lo.x = std::min(lo.x, q.x); lo.y = std::min(lo.y, q.y);
+                hi.x = std::max(hi.x, q.x); hi.y = std::max(hi.y, q.y);
+            }
+        }
+        if (hi.x < 0 || hi.y < 0 || lo.x > camera.viewport.x || lo.y > camera.viewport.y) continue;
+        receiver_low = std::min(receiver_low, chunk.low);
+        receiver_high = std::max(receiver_high, chunk.high);
+    }
     Vec2 low{1.0e9f, 1.0e9f}, high{-1.0e9f, -1.0e9f};
     for (i32 corner = 0; corner < 4; ++corner) {
         const Vec2 screen{(corner & 1) ? camera.viewport.x : 0.0f, (corner & 2) ? camera.viewport.y : 0.0f};
-        for (f32 height : {0.0f, top}) {
-            const Vec2 p = camera.screen_to_world(screen, height);
+        for (f32 height : {std::max(0.0f, receiver_low - 1.0f), receiver_high + object_height}) {
+            const Vec2 p = camera.screen_to_world(screen, height) - shadow_view_.light * height;
             low.x = std::min(low.x, p.x); low.y = std::min(low.y, p.y);
             high.x = std::max(high.x, p.x); high.y = std::max(high.y, p.y);
         }
     }
-    low.x = clamp(low.x, 0.0f, static_cast<f32>(map_width_));
-    low.y = clamp(low.y, 0.0f, static_cast<f32>(map_height_));
-    high.x = clamp(high.x, 0.0f, static_cast<f32>(map_width_));
-    high.y = clamp(high.y, 0.0f, static_cast<f32>(map_height_));
     // The map is projected along sun rays onto z=0. Fit visible receivers at
     // every elevation; select casters in this light-space volume, including
     // offscreen mountains and trees whose shadows enter the camera view.
-    low -= Vec2{4, 4};
-    high -= shadow_view_.light * top;
-    high += Vec2{4, 4};
+    // Fit horizontal coverage to nearby receivers. Distant mountains still
+    // use the global depth range, without consuming fine foliage texels.
+    low -= Vec2{2, 2};
+    high += Vec2{2, 2};
     const f32 span = std::ceil(std::max(high.x - low.x, high.y - low.y) / 8.0f) * 8.0f;
     const f32 texel = span / static_cast<f32>(kShadowResolution);
     const Vec2 origin{std::floor(low.x / texel) * texel, std::floor(low.y / texel) * texel};
     const f32 step = mesh_step(camera.zoom);
+    const bool model_lod = camera.zoom >= kDecorMinZoom;
     if (shadows_valid_ && shadow_rotation_ == camera.rotation && shadow_step_ == step &&
-        shadow_view_.origin.x == origin.x && shadow_view_.origin.y == origin.y && shadow_view_.size.x == span) return;
+        shadow_model_lod_ == model_lod && shadow_view_.origin.x == origin.x &&
+        shadow_view_.origin.y == origin.y && shadow_view_.size.x == span) return;
     shadow_view_.origin = origin;
     shadow_view_.size = {span, span};
     shadow_view_.height = top;
+    shadow_view_.resolution = kShadowResolution;
     shadow_rotation_ = camera.rotation;
     shadow_step_ = step;
+    shadow_model_lod_ = model_lod;
 
     GLint draw_fbo = 0, read_fbo = 0, viewport[4];
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
@@ -858,6 +912,9 @@ void MapRenderer::update_shadows(const IsometricCamera& camera) {
     }
     glBindVertexArray(0);
 
+    // At continent zoom scenery is subpixel and the terrain carries forests.
+    // Do not submit hundreds of thousands of tree shadow meshes for that LOD.
+    if (camera.zoom >= kDecorMinZoom) scenery_models_.draw_shadow(shadow_view_, heights_.id(), step);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(draw_fbo));
     glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(read_fbo));
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
@@ -948,6 +1005,7 @@ void MapRenderer::draw_ground(const IsometricCamera& camera, const MapDrawOption
     heights_.bind(5);
 
     // All visible chunks share a tessellation level, so their edges match.
+    mountain_parameters_.bind(8);mountain_height_.bind(9);
     // Distant views avoid submitting millions of subpixel triangles.
     const f32 step = mesh_step(camera.zoom);
     const i32 cells = static_cast<i32>(kChunkSize / step);
@@ -982,6 +1040,9 @@ void MapRenderer::draw_ground(const IsometricCamera& camera, const MapDrawOption
 }
 
 void MapRenderer::draw_scenery(const IsometricCamera& camera, f32 depth_begin, f32 depth_end, const SeeThrough* reveal) {
+    sprites_drawn_ += scenery_models_.draw(camera, shadow_view(), depth_scale(), depth_begin, depth_end,
+                                          reveal ? &reveal->lo : nullptr, reveal ? &reveal->hi : nullptr,
+                                          heights_.id(), mesh_step(camera.zoom));
     const Camera2D plane = camera.plane_camera();
     const f32 scale_depth = depth_scale();
     glEnable(GL_DEPTH_TEST);

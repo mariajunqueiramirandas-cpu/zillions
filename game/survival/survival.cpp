@@ -128,11 +128,15 @@ void Survival::reset(TileMap& map) {
 int Survival::pick_node(const TileMap& map, Vec2 point) const {
     int best = -1; float distance = 0.85f;
     const int cx = static_cast<int>(point.x), cy = static_cast<int>(point.y);
-    for (int y = cy-1; y <= cy+1; ++y) for (int x = cx-1; x <= cx+1; ++x) {
+    // Large trunks and outcrops are selectable at their visible footprint,
+    // without requiring the cursor to hit an old sub-tile sprite anchor.
+    for (int y = cy-4; y <= cy+4; ++y) for (int x = cx-4; x <= cx+4; ++x) {
         if (!map.in_bounds(x,y)) continue;
         for (int n = first_node_[static_cast<size_t>(map.index(x,y))]; n >= 0; n = next_node_[static_cast<size_t>(n)]) {
             const auto& node = nodes[static_cast<size_t>(n)];
-            const float d = length(map.scenery.objects[node.object].position-point);
+            const auto& object = map.scenery.objects[node.object];
+            const auto& shape = scenery_model(object.kind);
+            const float d = std::max(0.0f, length(object.position-point) - shape.trunk_radius*object.scale);
             if (node.remaining > 0 && d < distance) { distance = d; best = n; }
         }
     }
@@ -145,7 +149,9 @@ int Survival::node_at(u32 object) const {
 bool Survival::in_reach(const TileMap& map, Vec2 player, u32 object) const {
     if (object >= map.scenery.objects.size()) return false;
     const auto& o = map.scenery.objects[object];
-    if (!o.active || length(o.position - player) > 1.65f) return false;
+    const auto& dimensions = scenery_model(o.kind);
+    const f32 reach = std::max(1.65f, (dimensions.trunk_radius + dimensions.half_length) * o.scale + 0.9f);
+    if (!o.active || length(o.position - player) > reach) return false;
     const int x = static_cast<int>(player.x), y = static_cast<int>(player.y);
     if (!map.in_bounds(x, y)) return false;
     // Sample the short interaction segment: no reaching through cliffs/water.
@@ -161,8 +167,9 @@ bool Survival::in_reach(const TileMap& map, Vec2 player, u32 object) const {
         previous = next;
     }
     ObjectContact hit;
-    if (map.scenery.sweep(player, o.position-player, 0.02f, collision_floor(map,player)+0.4f, 0.25f, hit) &&
-        map.scenery.colliders[hit.collider].object != object) return false;
+    // Ignore the target during the query itself: a large target can surround
+    // the ray's start and otherwise mask a different obstruction behind it.
+    if (map.scenery.sweep(player, o.position-player, 0.02f, collision_floor(map,player)+0.4f, 0.25f, hit, object)) return false;
     return true;
 }
 const char* Survival::harvest_problem(const TileMap& map, Vec2 player, int node) const {

@@ -38,6 +38,8 @@ struct SpriteSet {
 
 struct TerrainArt {
     std::vector<Image> ground;  // kTerrainCount terrain layers followed by the noise layer
+    Image mountain_parameters; // linear data: ambient occlusion, roughness, metallic
+    Image mountain_height;     // linear displacement, used for surface-gradient detail
     Image sprites;              // premultiplied alpha
     std::vector<SpriteDef> defs;
 
@@ -53,7 +55,7 @@ struct TerrainArt {
 
 // Reads <asset_dir>/ground/<terrain>.png and <asset_dir>/sprites/<family>_<n>.png.
 // The ground textures and the sprites are each taken from files only if the
-// whole group is present with the expected sizes; otherwise that group is
+// whole group is present at one shared square resolution (256..2048); otherwise that group is
 // drawn in code and the reason is logged. The water and noise layers are data
 // for the terrain shader and are always generated. `seed` only affects what is
 // drawn in code.

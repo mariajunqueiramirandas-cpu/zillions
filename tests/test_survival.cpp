@@ -63,8 +63,9 @@ void crafting_and_storage() {
 void harvesting() {
     auto m=flat();const int tile=m.index(18,16);
     m.terrain[static_cast<size_t>(tile)]=Terrain::Forest;m.flags[static_cast<size_t>(tile)]=0;
-    m.scenery.objects.push_back({SceneryKind::Broadleaf,0,{18.25f,16.5f},1,{255,255,255,255},tile});
-    m.scenery.objects.push_back({SceneryKind::Conifer,0,{18.75f,16.5f},1,{255,255,255,255},tile});
+    // Two saplings fit in one tile; mature trees have metre-wide trunks.
+    m.scenery.objects.push_back({SceneryKind::Broadleaf,0,{18.25f,16.5f},0.15f,{255,255,255,255},tile});
+    m.scenery.objects.push_back({SceneryKind::Conifer,0,{18.75f,16.5f},0.15f,{255,255,255,255},tile});
     rebuild_scenery_colliders(m);
     Survival g;g.reset(m);const int a=g.node_at(0),b=g.node_at(1);CHECK(a>=0&&b>=0);
     const Vec2 player{17.5f,16.5f};
@@ -79,7 +80,7 @@ void harvesting() {
     for(int i=0;i<520;++i)g.harvest(m,player,b,true,false,1.0f/60);
     CHECK(g.bag.count(Item::Wood)==20&&m.buildable(18,16));CHECK(m.terrain[static_cast<size_t>(tile)]==Terrain::Dirt);
     // Full bags never consume a strike or a node's remaining supply.
-    auto n=flat();n.scenery.objects.push_back({SceneryKind::Boulder,0,{18.7f,16.5f},1,{255,255,255,255},tile});
+    auto n=flat();n.scenery.objects.push_back({SceneryKind::Boulder,0,{19.4f,16.5f},1,{255,255,255,255},tile});
     rebuild_scenery_colliders(n);Survival full;full.reset(n);full.pickaxe=true;full.bag=Inventory(1);full.bag.add(Item::Fiber,50);
     const int rock=full.node_at(0);const int remaining=full.nodes[static_cast<size_t>(rock)].remaining;
     full.harvest(n,player,rock,true,false,2);CHECK(full.nodes[static_cast<size_t>(rock)].remaining==remaining);

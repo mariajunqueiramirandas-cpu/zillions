@@ -630,7 +630,8 @@ TEST(player_autonomy_wanders_dynamically_and_deterministically) {
 // --- map generation -----------------------------------------------------------
 
 bool same_map(const TileMap& a, const TileMap& b) {
-    return a.level == b.level && a.terrain == b.terrain && a.resource == b.resource && a.flags == b.flags && a.elevation == b.elevation &&
+    return a.biomes.width == b.biomes.width && a.biomes.height == b.biomes.height && a.biomes.cells == b.biomes.cells &&
+           a.level == b.level && a.terrain == b.terrain && a.resource == b.resource && a.flags == b.flags && a.elevation == b.elevation &&
            a.moisture == b.moisture && a.shore_dist == b.shore_dist;
 }
 
@@ -880,7 +881,8 @@ TEST(png_round_trips) {
 void check_art_is_well_formed(const TerrainArt& art) {
     CHECK(art.ground.size() == static_cast<size_t>(kTerrainCount) + 1);
     for (const Image& layer : art.ground) {
-        CHECK(layer.width == kArtTilePixels * kGroundRepeatTiles && layer.height == layer.width);
+        CHECK(layer.width == art.ground.front().width && layer.height == layer.width);
+        CHECK(layer.width >= 256 && layer.width <= 2048);
     }
 
     const SpriteSet TerrainArt::* sets[] = {&TerrainArt::broadleaf, &TerrainArt::conifer, &TerrainArt::bush,   &TerrainArt::stone,
@@ -920,6 +922,8 @@ TEST(painted_art_loads_from_files) {
     const TerrainArt painted = load_terrain_art(jobs, ZL_ASSET_DIR);
     CHECK(painted.painted_ground);
     CHECK(painted.painted_sprites);
+    CHECK(painted.ground[static_cast<size_t>(Terrain::Mountain)].width==1024);
+    CHECK(painted.mountain_parameters.width==1024 && painted.mountain_height.width==1024);
     check_art_is_well_formed(painted);
 
     const TerrainArt drawn = build_terrain_art(jobs);
@@ -930,8 +934,19 @@ TEST(painted_art_loads_from_files) {
     const auto layer = [](const TerrainArt& art, int index) -> const Image& { return art.ground[static_cast<size_t>(index)]; };
     CHECK(!same_pixels(layer(painted, static_cast<int>(Terrain::Grass)), layer(drawn, static_cast<int>(Terrain::Grass))));
     CHECK(!same_pixels(painted.sprites, drawn.sprites));
-    CHECK(same_pixels(layer(painted, static_cast<int>(Terrain::Water)), layer(drawn, static_cast<int>(Terrain::Water))));
-    CHECK(same_pixels(layer(painted, kNoiseLayer), layer(drawn, kNoiseLayer)));
+    // Procedural water/noise keep their normalized lookup values when the
+    // authored array has more pixels. Sample common UVs with bilinear filtering.
+    for(int index:{static_cast<int>(Terrain::Water),kNoiseLayer}) {
+        const Image& a=layer(painted,index);const Image& b=layer(drawn,index);
+        for(int y=1;y<16;++y)for(int x=1;x<16;++x)for(u8 Color::* channel:{&Color::r,&Color::g,&Color::b,&Color::a}) {
+            const auto sample=[&](const Image& image) {
+                const int px=x*image.width/16,py=y*image.height/16;
+                return int(image.at(px-1,py-1).*channel)+int(image.at(px,py-1).*channel)+
+                       int(image.at(px-1,py).*channel)+int(image.at(px,py).*channel);
+            };
+            CHECK(std::abs(sample(a)-sample(b))<=8);
+        }
+    }
     for (const Color& c : layer(painted, static_cast<int>(Terrain::Grass)).pixels) CHECK(c.a == 255);
 
     // Check actual decoded texels, not just that files differ from placeholders.

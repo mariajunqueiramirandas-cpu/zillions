@@ -59,7 +59,9 @@ private:
     };
     struct GpuMaterial {
         Texture texture;
+        Texture metallic_roughness;
         f32 factor[4] = {1, 1, 1, 1};
+        f32 metallic = 0, roughness = 1;
     };
 
     void load(const char* asset_dir);

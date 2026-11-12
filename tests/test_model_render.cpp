@@ -61,7 +61,7 @@ void texture_orientation(RenderTarget& target, const IsometricCamera& camera) {
                        {"bufferView":0,"byteOffset":12,"componentType":5126,"count":3,"type":"VEC2"}],
           "images":[{"uri":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAIElEQVR4nGP8z0AaYCJR/agGogAjAwNpMTEI/TAcNAAAwjACHXGKZsUAAAAASUVORK5CYII="}],
           "textures":[{"source":0}],
-          "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+          "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0,"roughnessFactor":1}}],
           "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}]}],
           "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})";
     }

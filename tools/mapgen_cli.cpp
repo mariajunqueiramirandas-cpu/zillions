@@ -28,6 +28,10 @@ void print_stats(const TileMap& map) {
     std::printf("  reachable: %d of %d walkable tiles (%.1f%%), %d map-edge entry tiles\n", s.reachable_tiles, s.walkable_tiles,
                 s.walkable_tiles ? 100.0 * s.reachable_tiles / s.walkable_tiles : 0.0, s.reachable_border_tiles);
     std::printf("  buildable tiles near start: %d\n", s.buildable_near_start);
+    size_t trees=0;
+    for(const auto& object:map.scenery.objects)
+        trees+=object.kind==SceneryKind::Broadleaf || object.kind==SceneryKind::Conifer;
+    std::printf("  scenery: %zu objects, %zu trees, %zu ground props\n",map.scenery.objects.size(),trees,map.scenery.objects.size()-trees);
 }
 
 }  // namespace
@@ -54,7 +58,7 @@ int main(int argc, char** argv) {
     JobSystem jobs;
     if (bench) {
         std::printf("map generation at %d tiles per world unit, %d threads (best of 5)\n", params.resolution, jobs.thread_count());
-        for (const i32 size : {256, 512, 1024, 2048}) {
+        for (const i32 size : {256, 512, 1024, 2048, 4096}) {
             if (size < 64 * params.resolution) continue;
             f64 best = 1.0e9;
             MapGenParams p = params;

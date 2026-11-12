@@ -1,4 +1,5 @@
-// Draws a height-displaced isometric world and depth-tested upright scenery.
+// Draws a height-displaced isometric world, instanced 3D scenery and its
+// depth-tested painted fallback.
 #pragma once
 
 #include <vector>
@@ -9,6 +10,7 @@
 #include "gfx/sprite_batch.h"
 #include "gfx/texture.h"
 #include "render/terrain_art.h"
+#include "render/scenery_renderer.h"
 #include "world/tilemap.h"
 
 namespace zl {
@@ -68,15 +70,19 @@ public:
     const Texture& sprite_atlas() const { return sprites_; }
     const TerrainArt& art() const { return art_; }
 
-    u32 decor_count() const { return static_cast<u32>(decor_.size()); }
+    u32 decor_count() const { return static_cast<u32>(decor_.size()) + scenery_models_.instance_count(); }
+    u32 scenery_model_count() const { return scenery_models_.model_count(); }
     u32 sprites_drawn() const { return sprites_drawn_; }
 
 private:
     void build_decor(const TileMap& map);
+    void rebuild_decor();
     f32 mesh_step(f32 zoom) const;
     void update_shadows(const IsometricCamera& camera);
 
     TerrainArt art_;
+    SceneryRenderer scenery_models_;
+    Scenery render_scene_;  // object snapshot lets F5 switch model/fallback art safely
     Shader terrain_;
     Shader terrain_depth_, scenery_depth_, solid_depth_;
     Shader collision_lines_;
@@ -87,6 +93,7 @@ private:
     u32 solid_vao_ = 0, solid_buffer_ = 0, shadow_depth_sampler_ = 0;
     bool shadows_valid_ = false;
     bool active_shadows_ = true;
+    bool shadow_model_lod_ = false;
     i32 shadow_rotation_ = -1;
     f32 shadow_step_ = 0.0f;
     i32 u_view_ = -1, u_rotation_ = -1, u_depth_scale_ = -1, u_step_ = -1, u_cells_ = -1, u_wall_ = -1;
@@ -96,6 +103,7 @@ private:
     u32 chunk_buffer_ = 0;
 
     Texture ground_;    // terrain texture array
+    Texture mountain_parameters_, mountain_height_;
     Texture sprites_;   // sprite atlas
     Texture tiles_;     // per-tile ids, point sampled
     Texture relief_;    // surface normal, height and cavity at kReliefTexelsPerUnit texels per world unit

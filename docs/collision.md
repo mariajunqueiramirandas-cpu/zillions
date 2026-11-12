@@ -20,7 +20,7 @@ show the footprint; amber outlines and vertical edges show its height.
 |---|---|---|
 | ![Tree contact](screenshots/collision-tree.png) | ![Boulder contact](screenshots/collision-rock.png) | ![Ore contact](screenshots/collision-ore.png) |
 
-These captures hold sprint into each object for 150 fixed steps, then show the
+These captures hold sprint into each object until contact settles, then show the
 stopped character against its collider. The same contact position is retained
 at every camera angle:
 
