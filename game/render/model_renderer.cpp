@@ -9,6 +9,7 @@
 #include "core/base.h"
 #include "core/clock.h"
 #include "gfx/gl.h"
+#include "gfx/lighting.h"
 
 namespace zl {
 
@@ -34,7 +35,7 @@ uniform mat2 uRotation;   // camera quarter turn
 uniform float uDepthScale;
 out vec3 vWorld;
 out vec3 vNormal;
-out vec2 vUV;
+centroid out vec2 vUV;
 void main() {
     vec4 p = vec4(aPosition, 1.0);
     vec3 n = aNormal;
@@ -65,34 +66,24 @@ uniform vec4 uBaseColorFactor;
 uniform float uWaterline;   // world z, tiles
 uniform vec3 uViewDir;      // towards the viewer, world space
 uniform vec3 uSun;          // towards the sun, world space
+uniform sampler2D uMetallicRoughness;
+uniform vec2 uMaterial;
 in vec3 vWorld;
 in vec3 vNormal;
-in vec2 vUV;
+centroid in vec2 vUV;
 out vec4 oColor;
 
 void main() {
     if (vWorld.z < uWaterline) discard;
     vec4 texel = texture(uBaseColor, vUV) * uBaseColorFactor;
     if (texel.a < 0.02) discard;
-    // The painted world is deliberately flat; lift the darkest texels and
-    // keep the painted palette's warm light. The coat is nearly black in the
-    // source texture, so a stronger curve keeps its folds readable.
-    vec3 albedo = pow(max(texel.rgb, vec3(0.0)), vec3(0.62));
+    vec3 albedo = sceneToLinear(texture(uBaseColor,vUV).rgb)*uBaseColorFactor.rgb;
     vec3 N = normalize(vNormal);
-    vec3 L = normalize(uSun);
-    vec3 V = normalize(uViewDir);
-    float ndl = max(dot(N, L), 0.0);
-    float fill = max(dot(N, normalize(vec3(V.x, V.y, 0.2))), 0.0);
-    float visibility = shadowVisibility(vWorld.xy, vWorld.z, true);
-    vec3 ambient = vec3(0.58, 0.55, 0.50);
-    vec3 sun = vec3(1.08, 0.98, 0.82) * 0.85;
-    vec3 color = albedo * (ambient + sun * ndl * visibility + vec3(0.55, 0.52, 0.46) * fill * 0.38);
-    vec3 H = normalize(L + V);
-    float spec = pow(max(dot(N, H), 0.0), 28.0) * 0.25 * visibility;
-    color += vec3(0.80, 0.72, 0.56) * spec;
-    float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.24;
-    color += vec3(0.58, 0.53, 0.43) * rim;
-    oColor = vec4(color, 1.0);
+    float visibility = shadowVisibility(vWorld.xy, vWorld.z, false);
+    vec3 material=texture(uMetallicRoughness,vUV).rgb;
+    vec3 color=sceneLighting(albedo,N,uSun,uViewDir,visibility,
+                              material.g*uMaterial.y,material.b*uMaterial.x,1.0);
+    oColor = vec4(sceneDisplay(color), 1.0);
 }
 )";
 
@@ -178,7 +169,7 @@ ModelRenderer::~ModelRenderer() {
 void ModelRenderer::init(const char* asset_dir) {
     load(asset_dir);
 
-    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kModelFragment;
+    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kSceneLightingGLSL + kModelFragment;
     shader_.compile("model", kModelVertex, fragment.c_str());
     shader_.bind();
     glUniform1i(shader_.uniform("uBaseColor"), 0);
@@ -239,12 +230,16 @@ void ModelRenderer::upload(const GltfModel& model, std::vector<GpuMesh>& meshes,
         GpuMaterial material;
         const Image white = white_image();
         material.texture.create(white, TextureFilter::Linear, TextureWrap::Clamp);
+        material.metallic_roughness.create(white, TextureFilter::Linear, TextureWrap::Clamp);
         materials.push_back(std::move(material));
     } else {
         for (const GltfMaterial& source : model.materials) {
             GpuMaterial material;
             const Image image = source.base_color.width > 0 && source.base_color.height > 0 ? source.base_color : white_image();
             material.texture.create(image, TextureFilter::Trilinear, TextureWrap::Repeat);
+            material.metallic_roughness.create(source.metallic_roughness.width ? source.metallic_roughness : white_image(),
+                                               TextureFilter::Trilinear, TextureWrap::Repeat);
+            material.metallic=source.metallic_factor;material.roughness=source.roughness_factor;
             for (i32 i = 0; i < 4; ++i) material.factor[i] = source.base_color_factor[i];
             materials.push_back(std::move(material));
         }
@@ -354,6 +349,9 @@ void ModelRenderer::draw_mesh(const GpuMesh& mesh, const GpuMaterial& material, 
         glUniformMatrix4fv(u_bones_, count, GL_FALSE, bones[0].m);
     }
     material.texture.bind(0);
+    material.metallic_roughness.bind(1);
+    glUniform1i(shader_.uniform("uMetallicRoughness"),1);
+    glUniform2f(shader_.uniform("uMaterial"),material.metallic,material.roughness);
     glBindVertexArray(mesh.vao);
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh.count), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);

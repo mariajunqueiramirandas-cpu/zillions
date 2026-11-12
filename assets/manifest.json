@@ -4,101 +4,132 @@
   "ground": [
     {
       "path": "ground/grass.png",
-      "source": "source/ground.png",
-      "source_rect": [
-        3,
-        3,
-        441,
-        441
-      ],
+      "asset": "grass_ground",
+      "component": "Diffuse",
+      "source": "https://polyhaven.com/a/grass_ground",
+      "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/grass_ground/grass_ground_diff_1k.png",
+      "authors": {
+        "Charlotte Baglioni": "All"
+      },
+      "license": "CC0-1.0",
+      "provider_md5": "8501412ae79eea2cf8ab31e68caa5cf4",
+      "sha256": "fbab95206455b849677a07372ea2050956afbb559d9da6db946e3e6c02aae6a1",
       "size": [
-        256,
-        256
-      ]
+        1024,
+        1024
+      ],
+      "bytes": 5696034
     },
     {
       "path": "ground/forest.png",
-      "source": "source/ground.png",
-      "source_rect": [
-        447,
-        3,
-        884,
-        441
-      ],
+      "asset": "forest_ground_04",
+      "component": "Diffuse",
+      "source": "https://polyhaven.com/a/forest_ground_04",
+      "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/forest_ground_04/forest_ground_04_diff_1k.png",
+      "authors": {
+        "Rob Tuytel": "Photography, Processing",
+        "Rico Cilliers": "Minor adjustment"
+      },
+      "license": "CC0-1.0",
+      "provider_md5": "8f4318ba5044aa147999b08a10302fb4",
+      "sha256": "59fd7ca8dbfb83cd7adb487c67b744d80805a5abac60ce1fc89f2cd90c53c3cf",
       "size": [
-        256,
-        256
-      ]
+        1024,
+        1024
+      ],
+      "bytes": 2364487
     },
     {
       "path": "ground/dirt.png",
-      "source": "source/ground.png",
-      "source_rect": [
-        890,
-        3,
-        1327,
-        441
-      ],
+      "asset": "brown_mud_dry",
+      "component": "Diffuse",
+      "source": "https://polyhaven.com/a/brown_mud_dry",
+      "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/brown_mud_dry/brown_mud_dry_diff_1k.png",
+      "authors": {
+        "Rob Tuytel": "All"
+      },
+      "license": "CC0-1.0",
+      "provider_md5": "285628a97ccbcaa4463c875cb5cda5f3",
+      "sha256": "2e2ae48facfb3e5f682329b11b12aee6e2e02a733c4c2f44a4baca9ae0432ae1",
       "size": [
-        256,
-        256
-      ]
+        1024,
+        1024
+      ],
+      "bytes": 2530538
     },
     {
       "path": "ground/rocks.png",
-      "source": "source/ground.png",
-      "source_rect": [
-        1333,
-        3,
-        1771,
-        441
-      ],
+      "asset": "rocks_ground_02",
+      "component": "Diffuse",
+      "source": "https://polyhaven.com/a/rocks_ground_02",
+      "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/rocks_ground_02/rocks_ground_02_col_1k.png",
+      "authors": {
+        "Rob Tuytel": "All"
+      },
+      "license": "CC0-1.0",
+      "provider_md5": "79515fe2b90cc186d205af54bd34fede",
+      "sha256": "7daf3acca304216bba6859d45f679d80589fa4d7ba62c050b8788fbae1b7ab78",
       "size": [
-        256,
-        256
-      ]
+        1024,
+        1024
+      ],
+      "bytes": 2466432
     },
     {
       "path": "ground/sand.png",
-      "source": "source/ground.png",
-      "source_rect": [
-        3,
-        447,
-        441,
-        884
-      ],
+      "asset": "coast_sand_04",
+      "component": "Diffuse",
+      "source": "https://polyhaven.com/a/coast_sand_04",
+      "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/coast_sand_04/coast_sand_04_diff_1k.png",
+      "authors": {
+        "Rob Tuytel": "Photography, Processing",
+        "Dario Barresi": "Processing"
+      },
+      "license": "CC0-1.0",
+      "provider_md5": "a52b4b75978b22bed54c20fb1e42bdce",
+      "sha256": "e697ee24bddb756fe8dc6f0f4e5a6b48d49fed60ebf6994e49849af88c36503e",
       "size": [
-        256,
-        256
-      ]
-    },
-    {
-      "path": "ground/mountain.png",
-      "source": "source/ground.png",
-      "source_rect": [
-        447,
-        447,
-        884,
-        884
+        1024,
+        1024
       ],
-      "size": [
-        256,
-        256
-      ]
+      "bytes": 5885324
     },
     {
       "path": "ground/shallows.png",
-      "source": "source/ground.png",
-      "source_rect": [
-        890,
-        447,
-        1327,
-        884
-      ],
+      "asset": "coast_sand_01",
+      "component": "Diffuse",
+      "source": "https://polyhaven.com/a/coast_sand_01",
+      "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/coast_sand_01/coast_sand_01_diff_1k.png",
+      "authors": {
+        "Rob Tuytel": "All"
+      },
+      "license": "CC0-1.0",
+      "provider_md5": "5edfc319cd2cceb544dfed80d6d83610",
+      "sha256": "15e4834930b4fda7283ad1094c4f3b4e61d5fcf2c8e4036a79036d6d4166cb6f",
       "size": [
-        256,
-        256
-      ]
+        1024,
+        1024
+      ],
+      "bytes": 2025894
+    },
+    {
+      "path": "ground/mountain.png",
+      "asset": "rock_face_03",
+      "component": "Diffuse",
+      "source": "https://polyhaven.com/a/rock_face_03",
+      "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/rock_face_03/rock_face_03_diff_1k.png",
+      "authors": {
+        "Dario Barresi": "Photography",
+        "Rico Cilliers": "Processing"
+      },
+      "license": "CC0-1.0",
+      "provider_md5": "9c0e0f8a40d9bde94b4e92fa5574648a",
+      "sha256": "6f3be181a09c1489e9a355f86810bcfe5e43e4de9f9e21648cef51fa68220f91",
+      "size": [
+        1024,
+        1024
+      ],
+      "bytes": 5693797
     }
   ],
   "sprites": [

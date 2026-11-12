@@ -1,5 +1,6 @@
 # World model and generation: headless, depends only on the engine core.
 add_library(zl_world STATIC
+  world/biome.cpp
   world/map_preview.cpp
   world/mapgen.cpp
   world/scenery.cpp
@@ -42,6 +43,7 @@ if(ZL_BUILD_APP)
   add_library(zl_render STATIC
     render/figure_renderer.cpp
     render/model_renderer.cpp
+    render/scenery_renderer.cpp
     render/survival_ui.cpp
     render/map_renderer.cpp
     render/relief.cpp)

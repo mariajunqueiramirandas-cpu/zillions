@@ -591,6 +591,10 @@ bool parse_model(const std::vector<u8>& file, GltfModel& model, std::string& err
             Image base_color;
             bool decoded = false;
             if (const json* pbr = field(object, "pbrMetallicRoughness"); pbr && pbr->is_object()) {
+                if(const json* value=field(*pbr,"metallicFactor");value && value->is_number())
+                    material.metallic_factor=clamp(static_cast<f32>(value->get<double>()),0.0f,1.0f);
+                if(const json* value=field(*pbr,"roughnessFactor");value && value->is_number())
+                    material.roughness_factor=clamp(static_cast<f32>(value->get<double>()),0.0f,1.0f);
                 if (const json* factor = field(*pbr, "baseColorFactor"); factor && factor->is_array() && factor->size() >= 4) {
                     for (i32 c = 0; c < 4; ++c) {
                         const json& value = (*factor)[static_cast<size_t>(c)];
@@ -616,6 +620,19 @@ bool parse_model(const std::vector<u8>& file, GltfModel& model, std::string& err
                         return fail(error, "gltf: could not decode the base colour image");
                     }
                     decoded = true;
+                }
+                if(const json* texture=field(*pbr,"metallicRoughnessTexture");texture && texture->is_object()) {
+                    const i32 index=int_at(*texture,"index",-1);
+                    if(index<0 || index>=static_cast<i32>(texture_sources.size()))
+                        return fail(error,"gltf: material references a missing metallic-roughness texture");
+                    const i32 image_index=texture_sources[static_cast<size_t>(index)];
+                    if(image_index<0 || image_index>=static_cast<i32>(images.size()))
+                        return fail(error,"gltf: metallic-roughness texture references a missing image");
+                    const ImageSource& image=images[static_cast<size_t>(image_index)];
+                    Image data;
+                    if(image.external || !image.data || !decode_image(image.data,image.size,data))
+                        return fail(error,"gltf: could not decode the metallic-roughness image");
+                    material.metallic_roughness=downsample_image(data,max_texture_size);
                 }
             }
             material.double_sided = bool_at(object, "doubleSided", false);

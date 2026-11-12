@@ -30,7 +30,7 @@ constexpr f32 kCliffWidth = 0.20f;
 
 // Mountain erosion model (see erode_mountains).
 constexpr int kErosionPasses = 3;
-constexpr f32 kRidgeSlope = 1.15f;     // steepest slope, at a ridge crest (rise per tile)
+constexpr f32 kRidgeSlope = 3.0f;      // monumental ranges, rather than tree-sized rock mounds
 constexpr f32 kConcavity = 0.42f;      // how quickly slopes flatten as drainage grows
 constexpr f32 kHillslopeArea = 28.0f;  // drainage (texels) needed to cut a channel
 constexpr f32 kRillConcavity = 0.11f;   // faint concavity of the flanks themselves
@@ -60,9 +60,9 @@ struct Grid {
 // steps on the new surface lets divides settle where both flanks agree.
 //
 // `rock` marks mountain texels; on return `rise` holds height above the foot.
-void erode_mountains(const Grid& g, const std::vector<u8>& rock, u32 seed, JobSystem& jobs, std::vector<f32>& rise) {
+void erode_mountains(const Grid& g, const std::vector<u8>& rock, u32 seed, JobSystem& jobs, std::vector<f32>& rise, i32 texels_per_unit) {
     const size_t n = static_cast<size_t>(g.w) * static_cast<size_t>(g.h);
-    const f32 texel = 1.0f / static_cast<f32>(kReliefTexelsPerUnit);  // world units per texel
+    const f32 texel = 1.0f / static_cast<f32>(texels_per_unit);  // world units per texel
 
     // Distance to the foot of the range, in texels: the first drainage surface
     // is a dome, so the first main divide follows the middle of each massif.
@@ -268,7 +268,12 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
     const i32 w = map.width, h = map.height;
     // Texels per tile. The relief is laid out in world units, so a finer tile
     // grid over the same geography does not need a larger relief.
-    const i32 scale = std::max(1, kReliefTexelsPerUnit / map.resolution);
+    // Large worlds must not allocate an 8192² erosion grid and several GB of
+    // scratch arrays. Bound the relief texture while retaining every map tile;
+    // all derivatives and erosion distances use the effective resolution.
+    const i32 scale = std::max(1, std::min(kReliefTexelsPerUnit / map.resolution,
+                                         4096 / std::max(w, h)));
+    const i32 texels_per_unit = scale * map.resolution;
     const Grid g{w * scale, h * scale};
     const size_t n = static_cast<size_t>(g.w) * static_cast<size_t>(g.h);
     const size_t tiles = static_cast<size_t>(w) * static_cast<size_t>(h);
@@ -346,16 +351,16 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
         std::vector<f32> tmp(n);
         // Two wide passes approximate a Gaussian about a tile across, enough
         // to iron out the one-tile ripple of a diagonal staircase.
-        box_blur(g, terrace, tmp, kReliefTexelsPerUnit, jobs);
-        box_blur(g, tmp, terrace, kReliefTexelsPerUnit, jobs);
-        box_blur(g, gentle, tmp, kReliefTexelsPerUnit / 2, jobs);
+        box_blur(g, terrace, tmp, texels_per_unit, jobs);
+        box_blur(g, tmp, terrace, texels_per_unit, jobs);
+        box_blur(g, gentle, tmp, std::max(1, texels_per_unit / 2), jobs);
         gentle.swap(tmp);
     }
     jobs.parallel_for(g.h, 16, [&](i32 y0, i32 y1) {
         for (i32 y = y0; y < y1; ++y) {
             for (i32 x = 0; x < g.w; ++x) {
                 const size_t i = g.at(x, y);
-                const f32 px = (static_cast<f32>(x) + 0.5f) / kReliefTexelsPerUnit, py = (static_cast<f32>(y) + 0.5f) / kReliefTexelsPerUnit;  // world units
+                const f32 px = (static_cast<f32>(x) + 0.5f) / static_cast<f32>(texels_per_unit), py = (static_cast<f32>(y) + 0.5f) / static_cast<f32>(texels_per_unit);
                 const f32 ease = smoothstep(0.2f, 0.7f, gentle[i]);
                 // A little noise makes the cliff line wander. It moves the line
                 // only where levels are changing; flat ground snaps back to whole levels.
@@ -369,7 +374,7 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
     });
 
     std::vector<f32> rise(n, 0.0f);
-    erode_mountains(g, rock, seed, jobs, rise);
+    erode_mountains(g, rock, seed, jobs, rise, texels_per_unit);
     f32 highest_rise = 1.0e-3f;
     for (size_t i = 0; i < n; ++i) {
         height[i] += terrace[i] * kLevelHeight + rise[i];
@@ -385,7 +390,7 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
     // Cavity: height relative to the neighbourhood average. Positive on ridges
     // and negative in valleys; the shader uses it to pick both out.
     std::vector<f32> blurred(n);
-    box_blur(g, height, blurred, kReliefTexelsPerUnit + 1, jobs);
+    box_blur(g, height, blurred, texels_per_unit + 1, jobs);
 
     f32 top = 1.0e-3f;
     for (const f32 v : height) top = std::max(top, v);
@@ -404,7 +409,7 @@ Relief build_relief(const TileMap& map, JobSystem& jobs) {
                 const f32 gy = (sample(x - 1, y + 1) + 2.0f * sample(x, y + 1) + sample(x + 1, y + 1)) -
                                (sample(x - 1, y - 1) + 2.0f * sample(x, y - 1) + sample(x + 1, y - 1));
                 // The kernel spans two texels and sums to 4 per unit slope.
-                const f32 per_unit = static_cast<f32>(kReliefTexelsPerUnit) / 8.0f;
+                const f32 per_unit = static_cast<f32>(texels_per_unit) / 8.0f;
                 const f32 nx = -gx * per_unit, ny = -gy * per_unit;
                 const f32 inv = 1.0f / std::sqrt(nx * nx + ny * ny + 1.0f);
                 const size_t i = g.at(x, y);

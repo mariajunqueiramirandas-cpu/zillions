@@ -29,6 +29,12 @@ void check_base_color(const GltfModel& model) {
     CHECK(model.materials[0].base_color.width == 1024);
     CHECK(model.materials[0].base_color.height == 1024);
     CHECK(model.materials[0].base_color.pixels.size() == 1024u * 1024u);
+    // Scanned player and tools carry a packed linear material map. It must
+    // reach the renderer, otherwise cloth and wooden handles become metal.
+    CHECK(model.materials[0].metallic_roughness.width > 0);
+    CHECK(model.materials[0].metallic_roughness.width <= 1024);
+    CHECK(model.materials[0].metallic_factor == 1);
+    CHECK(model.materials[0].roughness_factor == 1);
 }
 
 void plague_character() {

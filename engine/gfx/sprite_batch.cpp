@@ -4,6 +4,7 @@
 #include <string>
 
 #include "gfx/gl.h"
+#include "gfx/lighting.h"
 
 namespace zl {
 
@@ -108,7 +109,7 @@ void main() {
         // The generated image already paints its own face lighting. Ignore
         // this approximate proxy's self-shadow, while retaining external casters.
         float visibility = shadowVisibility(position, height, false, shadowLow, shadowHigh);
-        oColor.rgb *= mix(vec3(0.53, 0.58, 0.65), vec3(1.0), visibility);
+        if(oColor.a>0.0001)oColor.rgb=scenePaintedShadow(oColor.rgb/oColor.a,visibility)*oColor.a;
     }
     if (texel.a < 0.002) discard;
 }
@@ -122,7 +123,7 @@ SpriteBatch::~SpriteBatch() {
 }
 
 void SpriteBatch::init() {
-    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kFragment;
+    const std::string fragment = std::string("#version 330 core\n") + kShadowSamplingGLSL + kSceneLightingGLSL + kFragment;
     shader_.compile("sprite", kVertex, fragment.c_str());
     shader_.bind();
     glUniform1i(shader_.uniform("uAtlas"), 0);

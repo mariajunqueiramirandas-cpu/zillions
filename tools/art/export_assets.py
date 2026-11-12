@@ -31,18 +31,22 @@ def export():
     manifest = {"authoring_pixels_per_tile": 32,
                 "sprite_alpha": "straight; premultiply once when uploading to the renderer",
                 "ground": [], "sprites": []}
-    sheet = Image.open(ASSETS / "source/ground.png").convert("RGB")
-    names = ["grass", "forest", "dirt", "rocks", "sand", "mountain", "shallows"]
-    for i, name in enumerate(names):
-        box = cell(sheet, i % 4, i // 4, 4, 2)
-        # Avoid sampling the neighbouring material at fractional sheet divisions.
-        box = (box[0] + 3, box[1] + 3, box[2] - 3, box[3] - 3)
-        image = sheet.crop(box).resize((256, 256), Image.Resampling.LANCZOS)
-        path = f"ground/{name}.png"
-        save(image, ASSETS / path)
-        manifest["ground"].append({"path": path, "source": "source/ground.png",
-                                   "source_rect": box, "size": [256, 256]})
-
+    material_manifest = ASSETS / "ground/materials.json"
+    if material_manifest.exists():
+        materials = json.loads(material_manifest.read_text())["materials"]
+        manifest["ground"] = [item for item in materials if item["component"] == "Diffuse"]
+    else:
+        sheet = Image.open(ASSETS / "source/ground.png").convert("RGB")
+        names = ["grass", "forest", "dirt", "rocks", "sand", "mountain", "shallows"]
+        for i, name in enumerate(names):
+            box = cell(sheet, i % 4, i // 4, 4, 2)
+            # Avoid sampling the neighbouring material at fractional sheet divisions.
+            box = (box[0] + 3, box[1] + 3, box[2] - 3, box[3] - 3)
+            image = sheet.crop(box).resize((256, 256), Image.Resampling.LANCZOS)
+            path = f"ground/{name}.png"
+            save(image, ASSETS / path)
+            manifest["ground"].append({"path": path, "source": "source/ground.png",
+                                       "source_rect": box, "size": [256, 256]})
     # name, count, canvas, anchor, source sheet, row, grid, source footprint
     families = [
         ("broadleaf", 6, (64, 76), (32, 66), "trees", 0, (6, 2), 0.98),
@@ -138,7 +142,7 @@ def previews(manifest):
         board = Image.new("RGB", (side * 4, (side + 28) * 2), "#1A1610")
         d = ImageDraw.Draw(board)
         for i, item in enumerate(manifest["ground"]):
-            image = Image.open(ASSETS / item["path"])
+            image = Image.open(ASSETS / item["path"]).convert("RGB").resize((256, 256), Image.Resampling.LANCZOS)
             tiled = Image.new("RGB", (256 * repeats, 256 * repeats))
             for y in range(repeats):
                 for x in range(repeats):

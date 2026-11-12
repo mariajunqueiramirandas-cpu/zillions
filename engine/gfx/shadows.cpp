@@ -57,9 +57,15 @@ float shadowVisibility(vec2 position, float height, bool receiverPlane, vec3 ign
     }
     vec2 radius = max(vec2(softness) / uShadowBounds.zw, 0.6 / vec2(textureSize(uShadowMap, 0)));
     float visible = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            vec2 offset = vec2(x, y) * radius;
+    // A disk avoids the repeated square outlines of the old sparse 3x3 grid.
+    // Fixed world-space sampling keeps camera movement free of temporal noise.
+    const vec2 disk[12]=vec2[12](
+        vec2(-0.326,-0.406),vec2(-0.840,-0.074),vec2(-0.696,0.457),
+        vec2(-0.203,0.621),vec2(0.962,-0.195),vec2(0.473,-0.480),
+        vec2(0.519,0.767),vec2(0.185,-0.893),vec2(0.507,0.064),
+        vec2(0.896,0.412),vec2(-0.322,-0.933),vec2(-0.792,-0.598));
+    for (int i = 0; i < 12; ++i) {
+            vec2 offset = disk[i] * radius;
             float sampleReference = reference + (receiverPlane ? dot(gradient, offset) : 0.0) - bias;
             float sampleVisibility;
             if (ignoredHigh.z > ignoredLow.z && uShadowDepthAvailable) {
@@ -70,9 +76,8 @@ float shadowVisibility(vec2 position, float height, bool receiverPlane, vec3 ign
                     ? 1.0 : step(sampleReference, blocker);
             } else sampleVisibility = texture(uShadowMap, vec3(uv + offset, sampleReference));
             visible += sampleVisibility;
-        }
     }
-    return visible / 9.0;
+    return visible / 12.0;
 }
 
 float shadowVisibility(vec2 position, float height, bool receiverPlane) {

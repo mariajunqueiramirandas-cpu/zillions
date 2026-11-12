@@ -63,13 +63,13 @@ void check_grounded_shadows(MapRenderer& renderer,JobSystem& jobs,const char* di
                 }
             }
         }
-        // A box's 180-degree turn cannot change the world-space shadow just
-        // because its painted front has a latch and its back has hinges.
+        // The fallback box proxy is symmetric. A real mesh also has a latch,
+        // lid and hinges: those may change the shadow, within 1% of the frame.
         for(int i=0;i<2;++i) {
             int changed=0;
             for(size_t p=0;p<facings[i].pixels.size();++p)
                 if(std::abs(int(facings[i].pixels[p].r)-int(facings[i+2].pixels[p].r))>2)++changed;
-            CHECK(changed<10);
+            CHECK(changed < (renderer.scenery_model_count() ? 512*512/100 : 10));
         }
         if(level==0) {
             camera.rotation=0;map.scenery.objects[0].facing=0;renderer.refresh_objects(map);
@@ -80,13 +80,16 @@ void check_grounded_shadows(MapRenderer& renderer,JobSystem& jobs,const char* di
                 return target.read_pixels();
             };
             const Image unoccluded=chest();
-            const Vec2 tree=camera.center+Vec2{-1.35f,-0.525f};
-            map.scenery.objects.push_back({SceneryKind::Broadleaf,0,tree,2,{255,255,255,255},map.index(31,31)});
+            const Vec2 tree=camera.center+ShadowView{}.light*3.0f;
+            map.scenery.objects.push_back({SceneryKind::Conifer,0,tree,1,{255,255,255,255},map.index(29,31)});
             renderer.refresh_objects(map);
             const Image occluded=chest();
-            const Vec2 top=camera.world_to_screen(camera.center,camera.center_height+0.30f);
-            CHECK(int(unoccluded.at(static_cast<int>(top.x),static_cast<int>(top.y)).r)-
-                  int(occluded.at(static_cast<int>(top.x),static_cast<int>(top.y)).r)>8);
+            const Vec2 top=camera.world_to_screen(camera.center,camera.center_height+0.4f);
+            int shaded_pixels=0;
+            for(int y=static_cast<int>(top.y)-16;y<=static_cast<int>(top.y)+16;++y)
+                for(int x=static_cast<int>(top.x)-16;x<=static_cast<int>(top.x)+16;++x)
+                    shaded_pixels+=int(unoccluded.at(x,y).r)-int(occluded.at(x,y).r)>8;
+            CHECK(shaded_pixels>20);
         }
     }
     CHECK(glGetError()==GL_NO_ERROR);
@@ -97,8 +100,9 @@ void capture_tool_strikes(MapRenderer& renderer,FigureRenderer& figures,JobSyste
     IsometricCamera camera;camera.viewport={512,512};camera.zoom=128;
     for(const auto tool:{HumanTool::Axe,HumanTool::Pickaxe}) {
         auto map=flat_shadow_scene();const Vec2 node{32.5f,32.5f};
-        const Vec2 standing=node-Vec2{tool==HumanTool::Axe?0.76f:0.9f,0};
         const auto kind=tool==HumanTool::Axe?SceneryKind::Broadleaf:SceneryKind::Boulder;
+        const auto& shape=scenery_model(kind);
+        const Vec2 standing=node-Vec2{shape.trunk_radius+shape.half_length+0.36f,0};
         map.scenery.objects.push_back({kind,0,node,1,{255,255,255,255},map.index(32,32)});
         rebuild_scenery_colliders(map);renderer.set_map(map,jobs);
         camera.center=(standing+node)*0.5f;camera.center_height=renderer.surface_height(camera.center,128)+0.9f;

@@ -8,6 +8,7 @@
 #include "core/base.h"
 #include "math/vec.h"
 #include "world/scenery.h"
+#include "world/biome.h"
 
 namespace zl {
 
@@ -84,6 +85,7 @@ struct TileMap {
     std::vector<u8> level;        // height level, 0 .. kHeightLevels - 1
 
     MapStats stats;
+    BiomeField biomes;          // smooth woodland/meadow/scrub/rock concentrations
     Scenery scenery;
 
     i32 tile_count() const { return width * height; }

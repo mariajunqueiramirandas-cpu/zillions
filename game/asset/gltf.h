@@ -1,8 +1,8 @@
 // A focused glTF 2.0 / GLB reader for the game's character and tool models.
 // It keeps the parts the renderer needs: indexed primitives with skinning
 // attributes, node transforms, skins, linear/step animation samplers and
-// base-colour textures. Everything is CPU-side and headless so the loader and
-// the animation state machine can be tested without a GPU.
+// base-colour and metallic-roughness textures. Everything is CPU-side and
+// headless so the loader and animation state machine can be tested without a GPU.
 #pragma once
 
 #include <string>
@@ -29,7 +29,9 @@ struct GltfPrimitive {
 
 struct GltfMaterial {
     Image base_color;                       // decoded and downsampled RGBA8
+    Image metallic_roughness;               // linear data: G roughness, B metallic
     f32 base_color_factor[4] = {1, 1, 1, 1};
+    f32 metallic_factor = 1, roughness_factor = 1; // glTF defaults
     bool double_sided = false;
 };
 
@@ -84,7 +86,8 @@ struct GltfModel {
     Vec3 bounds_max{0, 0, 0};
 
     // Reads a .glb (or a .gltf with embedded data URIs) and decodes only the
-    // base-colour textures. Returns false and fills `error` on failure.
+    // base-colour and packed metallic-roughness textures. Returns false and
+    // fills `error` on failure.
     bool load(const char* path, std::string& error, i32 max_texture_size = 1024);
 
     const GltfAnimation* animation(const char* name) const;

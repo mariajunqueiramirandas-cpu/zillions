@@ -1,5 +1,9 @@
 # Zillions: art direction
 
+The painted sprites below remain the fallback art brief. World scenery now
+uses 15 generated GLB families in the same palette; see
+[world scale](world-scale.md) for their physical dimensions and provenance.
+
 The gathering milestone adds image-model camp props, inventory icons and held
 tools, with four directional chest sprites. Its masters, prompts, exporter and production plan are documented in
 [the survival notes](survival.md#art-and-animation). The original painted
@@ -76,10 +80,10 @@ Two limits on that:
   in the same palette, not a scenery sprite. See [the plague doctor
   notes](plague-doctor.md).
 
-The player model, axe and pickaxe are the only 3D assets. Their base-colour
-textures are scans; the renderer lifts the darkest texels, lights them with the
-same warm sun and a lifted warm ambient as the terrain, adds a rim and a soft
-contact shadow, and cuts the legs at a ford's waterline. Keep future player
+The player model, axe and pickaxe accompany the 15 scenery models. Their base-colour
+textures are scans; the renderer lights them with the same linear-space sun
+and sky as the terrain, reads their metallic-roughness maps, adds a soft
+contact shadow, and cuts the legs at a ford's waterline. See [lighting](lighting.md). Keep future player
 models in the same palette and at the same scale (1.70 m tall, 0.8 tiles per
 metre).
 
@@ -112,6 +116,12 @@ All 47 images are painted from this one small palette and mixes of it.
   player needs to notice.
 
 ### Rules every image follows
+
+Production ground surfaces use the 1K CC0 scan set documented in
+[terrain materials](terrain-materials.md), including triplanar rock projection
+and height/roughness detail. The painted ground brief below remains the guide
+for procedural fallbacks; sprites retain their painted treatment. Fine litter
+lives primarily in the ground material, with sparse loose prop silhouettes.
 
 1. **Light comes from the upper left.** Lit faces are up and left, shaded faces
    are down and right, and cast shadows fall to the lower right. The shader
@@ -307,13 +317,10 @@ painted textures:
 The shore colour is a little darker than a straight match to the palette would
 give, so that a ford still reads as paler than the river around it.
 
-The leaden sky and smoke haze of the reference paintings cannot come from the
-images, so the shader ends with a slight overall grade: the ground loses about
-a seventh of its saturation and a thin layer of `HAZE` is laid over it. Sprites
-are not graded; they are painted in the palette already.
-
-The moisture tint on grass, the warm tint on cliff faces and the paler tone of
-high ground are unchanged from the placeholder version.
+The palette provides the sombre mood. Shared sun and sky illumination now
+preserve material colour, without a blanket brown haze or desaturation pass.
+Moisture and plateau tints stay subtle, while the surface normal and cast
+shadows establish the form. See [lighting](lighting.md).
 
 ## Sprites
 

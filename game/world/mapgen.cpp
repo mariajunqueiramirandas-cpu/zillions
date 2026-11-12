@@ -319,7 +319,11 @@ private:
                     const size_t i = coarse_at(cx, cy);
                     elevation[i] = saturate(0.30f + 0.28f * base + 0.52f * ridge * ridge * range);
                     moisture[i] = saturate(0.5f + 0.6f * fbm2(px / 100.0f, py / 100.0f, s_moist, 4));
-                    grove[i] = fbm2(px / 23.0f, py / 23.0f, s_grove, 3);
+                    // Large woodland districts contain smaller groves and
+                    // clearings. Their size does not stretch with map size.
+                    grove[i] = 0.52f * fbm2(qx / 95.0f, qy / 95.0f, s_grove, 3)
+                             + 0.33f * fbm2(qx / 31.0f, qy / 31.0f, s_grove + 1, 3)
+                             + 0.15f * fbm2(px / 10.0f, py / 10.0f, s_grove + 2, 2);
                 }
             }
         });
@@ -861,6 +865,24 @@ private:
 
         const f32 forest_cut = p_.forest > 0.0f ? percentile(scores, 1.0f - p_.forest) : kInf;
         const f32 dry_cut = percentile(dryness, 0.10f);
+        // Retain continuous suitability rather than losing it at a terrain
+        // threshold. Four-tile samples are sufficient for these soft fields.
+        m_.biomes.create(w_, h_);
+        jobs_.parallel_for(m_.biomes.height, 8, [&](i32 y0, i32 y1) {
+            for(i32 by=y0;by<y1;++by)for(i32 bx=0;bx<m_.biomes.width;++bx) {
+                const i32 x=std::min(bx*BiomeField::kSpacing,w_-1),y=std::min(by*BiomeField::kSpacing,h_-1);
+                const size_t i=at(x,y);
+                const f32 px=static_cast<f32>(x),py=static_cast<f32>(y);
+                const f32 wood=p_.forest>0?smoothstep(forest_cut-0.10f,forest_cut+0.07f,forest_score[i]):0.0f;
+                const f32 meadow=smoothstep(-0.40f,0.40f,fbm2(px/47.0f,py/47.0f,seed(31),3));
+                const f32 scrub=smoothstep(-0.35f,0.40f,fbm2(px/33.0f,py/33.0f,seed(32),3));
+                const f32 geology=smoothstep(-0.25f,0.45f,fbm2(px/(65.0f*rf_),py/(65.0f*rf_),seed(33),3));
+                const f32 foot=1.0f-smoothstep(1.0f*rf_,18.0f*rf_,to_rock_[i]);
+                m_.biomes.cells[static_cast<size_t>(by*m_.biomes.width+bx)]={wood,
+                    meadow*(1.0f-0.65f*wood)*smoothstep(0.20f,0.55f,m_.moisture[i]),
+                    scrub*(0.5f+0.5f*wood),std::max(foot,geology*0.75f)};
+            }
+        });
         jobs_.parallel_for(h_, kGrain, [&](i32 y0, i32 y1) {
             for (i32 y = y0; y < y1; ++y) {
                 for (i32 x = 0; x < w_; ++x) {
@@ -945,7 +967,7 @@ private:
         const auto unit_of = [](u32 h, u32 k) { return hash_to_unit(hash32(h + k)); };
 
         // Ponds, on wetter ground. A map asked to have no water gets none.
-        scatter(38, p_.water > 0.0f ? 0.60f * density : 0.0f, 18, [&](i32 x, i32 y, u32 h) {
+        scatter(32, p_.water > 0.0f ? 0.65f * density : 0.0f, 18, [&](i32 x, i32 y, u32 h) {
             const i32 c = static_cast<i32>(at(x, y));
             if (m_.moisture[static_cast<size_t>(c)] < 0.36f || start_dist(x, y) < kStartFlat + 2.0f) return;
             const u8 here = level(c);
@@ -954,20 +976,26 @@ private:
         });
 
         // Boulder outcrops, commoner on dry ground, with a skirt of bare earth.
-        scatter(21, 0.70f * density, 19, [&](i32 x, i32 y, u32 h) {
+        scatter(17, 0.75f * density, 19, [&](i32 x, i32 y, u32 h) {
             const i32 c = static_cast<i32>(at(x, y));
             if (start_dist(x, y) < kStartFlat || unit_of(h, 2) < m_.moisture[static_cast<size_t>(c)] - 0.45f) return;
+            if(unit_of(h,5)>0.20f+0.80f*m_.biomes.sample({static_cast<f32>(x),static_cast<f32>(y)}).rock)return;
             const u8 here = level(c);
+            bool placed=false;
             blob(x, y, lerp(1.6f, 3.1f, unit_of(h, 1)), h, [&](i32 i) { return ground(i) && level(i) == here && !is_ramp(i); },
-                 [&](i32 i, bool core) { m_.terrain[static_cast<size_t>(i)] = core ? Terrain::Rocks : Terrain::Dirt; });
+                 [&](i32 i, bool core) { placed=true;m_.terrain[static_cast<size_t>(i)] = core ? Terrain::Rocks : Terrain::Dirt; });
+            if(placed)m_.biomes.add_patch({static_cast<f32>(x),static_cast<f32>(y)},3.0f,{0,0,0,1});
         });
 
         // Stands of a few trees out in the open, unless the map is treeless.
         const f32 trees = p_.forest > 0.0f ? density : 0.0f;
-        scatter(15, 0.55f * trees, 20, [&](i32 x, i32 y, u32 h) {
+        scatter(12, 0.65f * trees, 20, [&](i32 x, i32 y, u32 h) {
             if (start_dist(x, y) < kStartClear + 2.0f) return;
+            if(unit_of(h,5)>0.20f+0.80f*m_.biomes.sample({static_cast<f32>(x),static_cast<f32>(y)}).woodland)return;
+            bool placed=false;
             blob(x, y, lerp(0.9f, 3.2f, unit_of(h, 1) * unit_of(h, 4)), h, [&](i32 i) { return ground(i) || m_.terrain[static_cast<size_t>(i)] == Terrain::Forest; },
-                 [&](i32 i, bool) { m_.terrain[static_cast<size_t>(i)] = Terrain::Forest; });
+                 [&](i32 i, bool) { placed=true;m_.terrain[static_cast<size_t>(i)] = Terrain::Forest; });
+            if(placed)m_.biomes.add_patch({static_cast<f32>(x),static_cast<f32>(y)},3.0f,{0.85f,0,0.45f,0});
         });
 
         // Lone trees.
@@ -975,8 +1003,10 @@ private:
         for (i32 y = 0; y < h_; ++y) {
             for (i32 x = 0; x < w_; ++x) {
                 const size_t i = at(x, y);
-                if (m_.terrain[i] == Terrain::Grass && hash_to_unit(hash2(x, y, s_lone)) < 0.010f * trees && start_dist(x, y) > kStartClear + 1.0f) {
+                const f32 woodland=m_.biomes.sample({static_cast<f32>(x),static_cast<f32>(y)}).woodland;
+                if (m_.terrain[i] == Terrain::Grass && hash_to_unit(hash2(x, y, s_lone)) < (0.003f+0.018f*woodland)*trees && start_dist(x, y) > kStartClear + 1.0f) {
                     m_.terrain[i] = Terrain::Forest;
+                    m_.biomes.add_patch({static_cast<f32>(x),static_cast<f32>(y)},0.5f,{0.40f,0,0.18f,0});
                 }
             }
         }
@@ -1127,15 +1157,20 @@ private:
                 if (!is_open_ground(static_cast<i32>(at(x, y))) || start_dist(x, y) < kStartFlat) continue;
                 bool foot = false;
                 for (int k = 0; k < 4 && !foot; ++k) foot = m_.terrain[at(x + kDx[k], y + kDy[k])] == Terrain::Mountain;
-                if (foot) candidates.push_back({hash2(x, y, s_ore), x, y});
+                const u32 key=hash2(x,y,s_ore);
+                const f32 geology=m_.biomes.sample({static_cast<f32>(x),static_cast<f32>(y)}).rock;
+                // Rich districts extend out from the exact cliff boundary.
+                // Sparse district interiors remain quiet between discoveries.
+                if ((foot || (to_rock_[at(x,y)]<12.0f*rf_ && hash_to_unit(hash32(key+1))<0.035f)) &&
+                    hash_to_unit(hash32(key+2))<0.18f+0.82f*geology) candidates.push_back({key,x,y});
             }
         }
         std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
             return a.key != b.key ? a.key < b.key : (a.y != b.y ? a.y < b.y : a.x < b.x);
         });
 
-        const i32 wanted = static_cast<i32>(std::lround(static_cast<f32>(n_) / static_cast<f32>(area(2100)) * p_.ore));
-        const f32 spacing = 15.0f * rf_;
+        const i32 wanted = static_cast<i32>(std::lround(static_cast<f32>(n_) / static_cast<f32>(area(1500)) * p_.ore));
+        const f32 spacing = 12.0f * rf_;
         const f32 half = static_cast<f32>(std::min(w_, h_)) * 0.5f / rf_;
         for (const Candidate& c : candidates) {
             if (static_cast<i32>(deposit_sites_.size()) >= wanted) break;

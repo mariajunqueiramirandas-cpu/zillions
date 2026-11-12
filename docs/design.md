@@ -54,6 +54,6 @@ the colony.
 - How a breach spreads through the colony.
 - What high ground gives a defender: range, vision, damage.
 - How many ramps a map should have. The generator currently places roughly
-  40 to 50 on the default 512×512 map, which is a guess until there is a horde to test
+  thousands on the default 4096×4096 map; their balance needs a horde to test
   it against.
 - Win condition: survive a fixed number of days, or something else.

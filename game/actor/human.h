@@ -8,15 +8,14 @@
 #include "core/base.h"
 #include "core/image.h"
 #include "math/vec.h"
+#include "world/scale.h"
 
 namespace zl {
 
 inline constexpr f32 kPi = 3.14159265f;
 
-// A person is modelled in metres and stands 1.75 m tall. Like the units of any
-// strategy game they are drawn larger than life, so a figure can be read
-// against trees that are two tiles high.
-inline constexpr f32 kTilesPerMetre = 0.80f;
+// People are modelled in metres. Physical tile scale is shared with scenery;
+// the player stays human-sized beneath the world's mature trees.
 
 enum class HairStyle : u8 {
     Cropped,   // short all over

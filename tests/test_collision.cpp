@@ -95,7 +95,9 @@ void generated_footprints_and_spawn() {
     map.scenery = build_scenery(map);
     CHECK(map.scenery.ready && !map.scenery.colliders.empty());
     int free = 0, blocked = 0;
-    for (f32 y = 8.05f; y < 9; y += 0.1f) for (f32 x = 8.05f; x < 9; x += 0.1f) {
+    // Sample across the crown: the trunk blocks while space below branches
+    // remains open, including after tree dimensions change.
+    for (f32 y = 6.05f; y < 11; y += 0.1f) for (f32 x = 6.05f; x < 11; x += 0.1f) {
         if (can_stand(map, {x, y}, Player::kRadius)) ++free;
         else ++blocked;
     }
